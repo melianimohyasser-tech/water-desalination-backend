@@ -1,9 +1,10 @@
 // ================================================================
 //  Water Desalination — Backend API v6
 //  ✅ v5: Mode Lock
-//  ✅ v6: حالة الفلاتر الذكية (f1-f4, fw1-fw4)
-//         حالة الإيقاف التدريجي (stopping, stopping3)
-//         تنبيهات وسجل أحداث للفلاتر
+//  ✅ v6: حالة الفلاتر الذكية + الإيقاف التدريجي
+//  ✅ v6b: السرعات الفعلية sp1-sp7 + حساب مستوى OFF/LOW/MEDIUM/HIGH
+//          المنطق: Nextion ON = MEDIUM (85-169)
+//          0→OFF | 1-84→LOW | 85-169→MEDIUM | 170-255→HIGH
 // ================================================================
 
 const express          = require('express');
@@ -88,13 +89,40 @@ let latestData = {
   pres1:0, pres2:0, flow1:0, flow2:0, vol1:0, vol2:0,
   tank1:0, tank2:0, tank3:0, tank4:0,
   p1:0, p2:0, p3:0, p4:0, p5:0, p6:0, p7:0,
+  // ✅ v6b: السرعات الفعلية
+  sp1:0, sp2:0, sp3:0, sp4:0, sp5:0, sp6:0, sp7:0,
   sys1:0, sys3:0, mode:0, valve:0,
-  // ✅ v6: حالة الفلاتر الذكية
-  f1:0, f2:0, f3:0, f4:0,         // منسد
-  fw1:0, fw2:0, fw3:0, fw4:0,     // ينتظر إعادة التشغيل
-  stopping:0, stopping3:0,         // إيقاف تدريجي
+  f1:0, f2:0, f3:0, f4:0,
+  fw1:0, fw2:0, fw3:0, fw4:0,
+  stopping:0, stopping3:0,
   timestamp: new Date().toISOString()
 };
+
+// ✅ v6b: حساب مستوى المضخة من السرعة الفعلية
+// Nextion ON ≈ MEDIUM (pumpSpeedValues الافتراضية 150-200 = MEDIUM/HIGH)
+// 0→off | 1-84→low | 85-169→medium | 170-255→high
+function pumpLevel(speed) {
+  if (speed === 0)          return 'off';
+  if (speed <= 84)          return 'low';
+  if (speed <= 169)         return 'medium';
+  return 'high';
+}
+
+// ✅ v6b: إضافة pumpLevels لكل استجابة latest
+function withPumpLevels(data) {
+  return {
+    ...data,
+    levels: {
+      p1: pumpLevel(data.sp1 ?? 0),
+      p2: pumpLevel(data.sp2 ?? 0),
+      p3: pumpLevel(data.sp3 ?? 0),
+      p4: pumpLevel(data.sp4 ?? 0),
+      p5: pumpLevel(data.sp5 ?? 0),
+      p6: pumpLevel(data.sp6 ?? 0),
+      p7: pumpLevel(data.sp7 ?? 0),
+    }
+  };
+}
 
 let pendingCommands  = [];
 let lastESP32Contact = null;
@@ -135,6 +163,13 @@ app.post('/api/sensor', async (req, res) => {
     latestData = {
       ...d,
       mode:     effectiveMode,
+      sp1: d.sp1 ?? latestData.sp1,
+      sp2: d.sp2 ?? latestData.sp2,
+      sp3: d.sp3 ?? latestData.sp3,
+      sp4: d.sp4 ?? latestData.sp4,
+      sp5: d.sp5 ?? latestData.sp5,
+      sp6: d.sp6 ?? latestData.sp6,
+      sp7: d.sp7 ?? latestData.sp7,
       f1:       d.f1  ?? latestData.f1,
       f2:       d.f2  ?? latestData.f2,
       f3:       d.f3  ?? latestData.f3,
@@ -215,7 +250,7 @@ app.post('/api/sensor', async (req, res) => {
 // ================================================================
 //  GET /api/sensor/latest
 // ================================================================
-app.get('/api/sensor/latest', (req, res) => res.json(latestData));
+app.get('/api/sensor/latest', (req, res) => res.json(withPumpLevels(latestData)));
 
 // ================================================================
 //  GET /api/sensor/history
