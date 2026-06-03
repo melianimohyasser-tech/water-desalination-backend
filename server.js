@@ -43,6 +43,7 @@ async function initDB() {
       p7 INTEGER DEFAULT 0,
       sys1  INTEGER DEFAULT 0, sys3  INTEGER DEFAULT 0,
       mode  INTEGER DEFAULT 0, valve INTEGER DEFAULT 0,
+      temp1     REAL DEFAULT 0, temp2  REAL DEFAULT 0,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -53,6 +54,7 @@ async function initDB() {
       type      TEXT NOT NULL,
       message   TEXT NOT NULL,
       level     TEXT DEFAULT 'info',
+      temp1     REAL DEFAULT 0, temp2  REAL DEFAULT 0,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -95,6 +97,7 @@ let latestData = {
   f1:0, f2:0, f3:0, f4:0,
   fw1:0, fw2:0, fw3:0, fw4:0,
   stopping:0, stopping3:0,
+  temp1:0, temp2:0,
   timestamp: new Date().toISOString()
 };
 
@@ -180,6 +183,8 @@ app.post('/api/sensor', async (req, res) => {
       fw4:      d.fw4 ?? latestData.fw4,
       stopping:  d.stopping  ?? latestData.stopping,
       stopping3: d.stopping3 ?? latestData.stopping3,
+      temp1:     d.temp1     ?? latestData.temp1,
+      temp2:     d.temp2     ?? latestData.temp2,
       timestamp: new Date().toISOString()
     };
     lastESP32Contact = new Date();
@@ -224,8 +229,9 @@ app.post('/api/sensor', async (req, res) => {
       sql: `INSERT INTO sensor_data
               (ph,tds,turb1,turb2,pres1,pres2,flow1,flow2,
                vol1,vol2,tank1,tank2,tank3,tank4,
-               p1,p2,p3,p4,p5,p6,p7,sys1,sys3,mode,valve)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+               p1,p2,p3,p4,p5,p6,p7,sys1,sys3,mode,valve,
+               temp1,temp2)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       args: [
         d.ph??0,    d.tds??0,   d.turb1??0, d.turb2??0,
         d.pres1??0, d.pres2??0, d.flow1??0, d.flow2??0,
@@ -234,6 +240,7 @@ app.post('/api/sensor', async (req, res) => {
         d.p1??0, d.p2??0, d.p3??0, d.p4??0,
         d.p5??0, d.p6??0, d.p7??0,
         d.sys1??0,  d.sys3??0,  d.mode??0,  d.valve??0,
+        d.temp1??0, d.temp2??0,
       ]
     });
 
