@@ -1,16 +1,53 @@
 // ================================================================
-//  Water Desalination — Backend API v6
-//  ✅ v5: Mode Lock
-//  ✅ v6: حالة الفلاتر الذكية + الإيقاف التدريجي
-//  ✅ v6b: السرعات الفعلية sp1-sp7 + حساب مستوى OFF/LOW/MEDIUM/HIGH
-//          المنطق: Nextion ON = MEDIUM (85-169)
-//          0→OFF | 1-84→LOW | 85-169→MEDIUM | 170-255→HIGH
+//  Water Desalination — Backend API v7
+//  ✅ v6b: السرعات الفعلية + مستويات المضخات
+//  ✅ v7:  نظام المصادقة — users جدول + JWT بسيط
+//          admin / user / guest
 // ================================================================
 
 const express          = require('express');
 const cors             = require('cors');
 const { createClient } = require('@libsql/client');
+const bcrypt           = require('bcryptjs');
 require('dotenv').config();
+
+// ================================================================
+//  JWT بسيط بدون مكتبة خارجية
+// ================================================================
+const JWT_SECRET = process.env.JWT_SECRET || 'lbm_water_secret_2026';
+
+function signToken(payload) {
+  const header  = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
+  const body    = Buffer.from(JSON.stringify({...payload, iat: Date.now()})).toString('base64url');
+  const crypto  = require('crypto');
+  const sig     = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${sig}`;
+}
+
+function verifyToken(token) {
+  try {
+    const [header, body, sig] = token.split('.');
+    const crypto = require('crypto');
+    const expected = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    if (sig !== expected) return null;
+    return JSON.parse(Buffer.from(body, 'base64url').toString());
+  } catch { return null; }
+}
+
+// Middleware للتحقق من الـ token
+function auth(roles = []) {
+  return (req, res, next) => {
+    const h = req.headers.authorization || '';
+    const token = h.startsWith('Bearer ') ? h.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'غير مصرح' });
+    const payload = verifyToken(token);
+    if (!payload) return res.status(401).json({ error: 'token منتهي أو غير صحيح' });
+    if (roles.length && !roles.includes(payload.role))
+      return res.status(403).json({ error: 'صلاحيات غير كافية' });
+    req.user = payload;
+    next();
+  };
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -58,6 +95,29 @@ async function initDB() {
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS users (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      name      TEXT NOT NULL,
+      email     TEXT UNIQUE NOT NULL,
+      password  TEXT NOT NULL,
+      role      TEXT DEFAULT 'guest',
+      active    INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // ✅ إنشاء حساب admin افتراضي إذا ما فيه مستخدمين
+  const usersCount = await db.execute('SELECT COUNT(*) as n FROM users');
+  if (usersCount.rows[0].n === 0) {
+    const hash = await bcrypt.hash('LBM@2025', 10);
+    await db.execute({
+      sql:  `INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)`,
+      args: ['Administrator', 'admin@lbm.com', hash, 'admin']
+    });
+    console.log('✅ Admin: admin@lbm.com / LBM@2025');
+  }
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS settings (
@@ -338,7 +398,7 @@ app.get('/api/settings', async (req, res) => {
   } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
 });
 
-app.post('/api/settings', async (req, res) => {
+app.post('/api/settings', auth(['admin']), async (req, res) => {
   try {
     const updates = req.body;
     for (const [key, value] of Object.entries(updates)) {
@@ -369,7 +429,7 @@ app.get('/api/timer', (req, res) => {
 // ================================================================
 //  POST /api/command ✅ مع دعم CMD:SPEED:X:Y
 // ================================================================
-app.post('/api/command', async (req, res) => {
+app.post('/api/command', auth(['admin','user']), async (req, res) => {
   const { command } = req.body;
 
   if (!command || !command.startsWith('CMD:')) {
@@ -494,6 +554,92 @@ app.get('/api/esp32/status', (req, res) => {
     return res.json({ connected: false, lastSeen: null, secondsAgo: null });
   const secondsAgo = Math.floor((new Date() - lastESP32Contact) / 1000);
   res.json({ connected: secondsAgo <= 10, lastSeen: lastESP32Contact.toISOString(), secondsAgo });
+});
+
+
+// ================================================================
+//  POST /api/auth/login
+// ================================================================
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password)
+    return res.status(400).json({ error: 'أدخل الإيميل والباسوورد' });
+  try {
+    const result = await db.execute({ sql: 'SELECT * FROM users WHERE email = ? AND active = 1', args: [email.toLowerCase()] });
+    const user = result.rows[0];
+    if (!user) return res.status(401).json({ error: 'إيميل أو باسوورد غلط' });
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok)  return res.status(401).json({ error: 'إيميل أو باسوورد غلط' });
+    const token = signToken({ id: user.id, email: user.email, name: user.name, role: user.role });
+    await logEvent('auth', `دخول: ${user.name} (${user.role})`, 'info');
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ================================================================
+//  GET /api/auth/me  — معلومات المستخدم الحالي
+// ================================================================
+app.get('/api/auth/me', auth(), (req, res) => {
+  res.json({ user: req.user });
+});
+
+// ================================================================
+//  GET /api/users  — قائمة المستخدمين (admin فقط)
+// ================================================================
+app.get('/api/users', auth(['admin']), async (req, res) => {
+  try {
+    const result = await db.execute('SELECT id, name, email, role, active, created_at FROM users ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ================================================================
+//  POST /api/users  — إنشاء مستخدم جديد (admin فقط)
+// ================================================================
+app.post('/api/users', auth(['admin']), async (req, res) => {
+  const { name, email, password, role } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ error: 'اسم وإيميل وباسوورد مطلوبين' });
+  const validRoles = ['admin', 'user', 'guest'];
+  const userRole = validRoles.includes(role) ? role : 'guest';
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    await db.execute({ sql: `INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)`, args: [name, email.toLowerCase(), hash, userRole] });
+    await logEvent('auth', `مستخدم جديد: ${name} (${userRole})`, 'info');
+    res.json({ status: 'ok', message: `تم إنشاء ${name}` });
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) return res.status(400).json({ error: 'الإيميل مستعمل' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ================================================================
+//  PUT /api/users/:id  — تعديل مستخدم (admin فقط)
+// ================================================================
+app.put('/api/users/:id', auth(['admin']), async (req, res) => {
+  const { name, role, active, password } = req.body;
+  const id = parseInt(req.params.id);
+  try {
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      await db.execute({ sql: 'UPDATE users SET password = ? WHERE id = ?', args: [hash, id] });
+    }
+    if (name)   await db.execute({ sql: 'UPDATE users SET name = ? WHERE id = ?',   args: [name, id] });
+    if (role)   await db.execute({ sql: 'UPDATE users SET role = ? WHERE id = ?',   args: [role, id] });
+    if (active !== undefined) await db.execute({ sql: 'UPDATE users SET active = ? WHERE id = ?', args: [active ? 1 : 0, id] });
+    res.json({ status: 'ok' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ================================================================
+//  DELETE /api/users/:id  — حذف مستخدم (admin فقط، لا يحذف نفسه)
+// ================================================================
+app.delete('/api/users/:id', auth(['admin']), async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (id === req.user.id) return res.status(400).json({ error: 'لا تقدر تحذف حسابك' });
+  try {
+    await db.execute({ sql: 'DELETE FROM users WHERE id = ?', args: [id] });
+    res.json({ status: 'ok' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ================================================================
