@@ -1,8 +1,9 @@
 // ================================================================
-//  Water Desalination — Backend API v4 FINAL
+//  Water Desalination — Backend API v5
 //  Node.js + Express + Turso (LibSQL)
-//  ✅ أوامر السرعة CMD:SPEED:X:Y
-//  ✅ إحصائيات، سجل أحداث، إعدادات، مؤقت
+//  ✅ v4: أوامر السرعة CMD:SPEED:X:Y
+//  ✅ v5 FIX: Mode Lock — يمنع الـ JSON من الـ Mega من الكتابة فوق
+//            المود المطلوب بعد CMD:MODE_X لمدة 4 ثواني
 // ================================================================
 
 const express          = require('express');
@@ -97,6 +98,14 @@ let sys1StartTime    = null;
 let sys3StartTime    = null;
 let pumpSpeeds       = [150,150,150,200,150,150,150];
 
+// ✅ v5 FIX: حماية المود من الكتابة الفورية
+// لما يجي أمر CMD:MODE_X، نحفظ المود المطلوب ونتجاهل
+// قيمة "mode" اللي تجي من الـ Mega لمدة MODE_LOCK_MS
+let modeLocked     = false;   // هل المود محمي؟
+let modeLockedValue = null;   // القيمة المحمية (0=auto, 1=manual)
+let modeLockTimer  = null;    // Timer لإلغاء الحماية
+const MODE_LOCK_MS = 4000;    // 4 ثواني — أكثر من SEND_INTERVAL (1s) × 3
+
 // ================================================================
 //  تسجيل الأحداث
 // ================================================================
@@ -116,7 +125,10 @@ app.post('/api/sensor', async (req, res) => {
   try {
     const d    = req.body;
     const prev = { ...latestData };
-    latestData       = { ...d, timestamp: new Date().toISOString() };
+
+    // ✅ v5 FIX: إذا المود محمي، احتفظ بالقيمة المحمية ولا تكتب قيمة الـ Mega
+    const effectiveMode = modeLocked ? modeLockedValue : (d.mode ?? latestData.mode);
+    latestData = { ...d, mode: effectiveMode, timestamp: new Date().toISOString() };
     lastESP32Contact = new Date();
 
     // مؤقت النظام
@@ -329,6 +341,22 @@ app.post('/api/command', async (req, res) => {
   }
 
   pendingCommands.push(command);
+
+  // ✅ v5 FIX: لما يجي أمر تبديل المود — قفل المود فوراً
+  if (command === 'CMD:MODE_MANUAL' || command === 'CMD:MODE_AUTO') {
+    const newMode = command === 'CMD:MODE_MANUAL' ? 1 : 0;
+    modeLocked      = true;
+    modeLockedValue = newMode;
+    latestData.mode = newMode;   // حدّث الـ latestData فوراً باش التطبيق يشوفه في أول GET
+    if (modeLockTimer) clearTimeout(modeLockTimer);
+    modeLockTimer = setTimeout(() => {
+      modeLocked      = false;
+      modeLockedValue = null;
+      console.log(`[MODE LOCK] انتهت الحماية — المود الآن حسب الـ Mega`);
+    }, MODE_LOCK_MS);
+    console.log(`[MODE LOCK] مود مقفول على ${newMode} لـ ${MODE_LOCK_MS}ms`);
+  }
+
   await logEvent('command', `أمر: ${command}`, 'info');
   console.log(`[CMD] ${command}`);
   res.json({ status: 'ok', queued: command });
