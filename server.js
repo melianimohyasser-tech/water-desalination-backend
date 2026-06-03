@@ -1,9 +1,9 @@
 // ================================================================
-//  Water Desalination — Backend API v5
-//  Node.js + Express + Turso (LibSQL)
-//  ✅ v4: أوامر السرعة CMD:SPEED:X:Y
-//  ✅ v5 FIX: Mode Lock — يمنع الـ JSON من الـ Mega من الكتابة فوق
-//            المود المطلوب بعد CMD:MODE_X لمدة 4 ثواني
+//  Water Desalination — Backend API v6
+//  ✅ v5: Mode Lock
+//  ✅ v6: حالة الفلاتر الذكية (f1-f4, fw1-fw4)
+//         حالة الإيقاف التدريجي (stopping, stopping3)
+//         تنبيهات وسجل أحداث للفلاتر
 // ================================================================
 
 const express          = require('express');
@@ -89,6 +89,10 @@ let latestData = {
   tank1:0, tank2:0, tank3:0, tank4:0,
   p1:0, p2:0, p3:0, p4:0, p5:0, p6:0, p7:0,
   sys1:0, sys3:0, mode:0, valve:0,
+  // ✅ v6: حالة الفلاتر الذكية
+  f1:0, f2:0, f3:0, f4:0,         // منسد
+  fw1:0, fw2:0, fw3:0, fw4:0,     // ينتظر إعادة التشغيل
+  stopping:0, stopping3:0,         // إيقاف تدريجي
   timestamp: new Date().toISOString()
 };
 
@@ -126,9 +130,23 @@ app.post('/api/sensor', async (req, res) => {
     const d    = req.body;
     const prev = { ...latestData };
 
-    // ✅ v5 FIX: إذا المود محمي، احتفظ بالقيمة المحمية ولا تكتب قيمة الـ Mega
+    // ✅ v6: حفظ حقول الفلاتر والإيقاف التدريجي
     const effectiveMode = modeLocked ? modeLockedValue : (d.mode ?? latestData.mode);
-    latestData = { ...d, mode: effectiveMode, timestamp: new Date().toISOString() };
+    latestData = {
+      ...d,
+      mode:     effectiveMode,
+      f1:       d.f1  ?? latestData.f1,
+      f2:       d.f2  ?? latestData.f2,
+      f3:       d.f3  ?? latestData.f3,
+      f4:       d.f4  ?? latestData.f4,
+      fw1:      d.fw1 ?? latestData.fw1,
+      fw2:      d.fw2 ?? latestData.fw2,
+      fw3:      d.fw3 ?? latestData.fw3,
+      fw4:      d.fw4 ?? latestData.fw4,
+      stopping:  d.stopping  ?? latestData.stopping,
+      stopping3: d.stopping3 ?? latestData.stopping3,
+      timestamp: new Date().toISOString()
+    };
     lastESP32Contact = new Date();
 
     // مؤقت النظام
@@ -142,6 +160,22 @@ app.post('/api/sensor', async (req, res) => {
     if (prev.sys3  !== d.sys3)  await logEvent('system',  `النظام 3 ${d.sys3  ? 'بدأ' : 'توقف'}`, d.sys3  ? 'info' : 'warning');
     if (prev.valve !== d.valve) await logEvent('valve',   `الصمام ${d.valve ? 'فُتح' : 'أُغلق'}`,  'info');
     if (prev.mode  !== d.mode)  await logEvent('mode',    `وضع التشغيل: ${d.mode ? 'يدوي' : 'تلقائي'}`, 'info');
+
+    // ✅ v6: تسجيل أحداث الفلاتر
+    const filterNames = ['فلتر 1 (P1)', 'فلتر 2 (P2)', 'فلتر 3 (P5)', 'فلتر 4 (P6)'];
+    const fFields = ['f1','f2','f3','f4'];
+    const fwFields = ['fw1','fw2','fw3','fw4'];
+    for (let i = 0; i < 4; i++) {
+      if (prev[fFields[i]] !== d[fFields[i]]) {
+        if (d[fFields[i]]) await logEvent('filter', `${filterNames[i]} منسد — تم إيقاف المضخة`, 'warning');
+        else               await logEvent('filter', `${filterNames[i]} تم تنظيفه`, 'info');
+      }
+      if (prev[fwFields[i]] !== d[fwFields[i]] && d[fwFields[i]])
+        await logEvent('filter', `${filterNames[i]} ينتظر إعادة التشغيل (15s)`, 'info');
+    }
+    // ✅ v6: تسجيل الإيقاف التدريجي
+    if (prev.stopping  !== d.stopping  && d.stopping)  await logEvent('system', 'إيقاف تدريجي لنظام 1 بدأ', 'warning');
+    if (prev.stopping3 !== d.stopping3 && d.stopping3) await logEvent('system', 'إيقاف تدريجي لنظام 3 بدأ', 'warning');
 
     // تنبيهات الحساسات
     if (d.ph > 0 && (d.ph < 6.5 || d.ph > 8.5))
@@ -394,6 +428,18 @@ app.get('/api/alerts', async (req, res) => {
     alerts.push({ level:'warning', message:`خزان 1 شبه فارغ: ${d.tank1}%`, field:'tank1' });
   if (d.tank4 > tank_full)
     alerts.push({ level:'info',    message:`خزان 4 ممتلئ: ${d.tank4}%`,    field:'tank4' });
+
+  // ✅ v6: تنبيهات الفلاتر الذكية
+  const filterLabels = ['P1','P2','P5','P6'];
+  const fKeys  = ['f1','f2','f3','f4'];
+  const fwKeys = ['fw1','fw2','fw3','fw4'];
+  for (let i = 0; i < 4; i++) {
+    if (d[fKeys[i]])  alerts.push({ level:'warning', message:`فلتر ${filterLabels[i]} منسد — المضخة متوقفة`, field:`filter${i+1}` });
+    if (d[fwKeys[i]]) alerts.push({ level:'info',    message:`فلتر ${filterLabels[i]} ينتظر إعادة التشغيل`, field:`filter${i+1}` });
+  }
+  // ✅ v6: تنبيه الإيقاف التدريجي
+  if (d.stopping)  alerts.push({ level:'info', message:'نظام 1 في وضع الإيقاف التدريجي', field:'stopping' });
+  if (d.stopping3) alerts.push({ level:'info', message:'نظام 3 في وضع الإيقاف التدريجي', field:'stopping3' });
 
   res.json({ count: alerts.length, alerts });
 });
