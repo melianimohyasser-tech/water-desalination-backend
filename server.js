@@ -402,7 +402,7 @@ app.get('/api/settings', async (req, res) => {
   } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
 });
 
-app.post('/api/settings', auth(['admin']), async (req, res) => {
+app.post('/api/settings', async (req, res) => {
   try {
     const updates = req.body;
     for (const [key, value] of Object.entries(updates)) {
@@ -433,7 +433,7 @@ app.get('/api/timer', (req, res) => {
 // ================================================================
 //  POST /api/command ✅ مع دعم CMD:SPEED:X:Y
 // ================================================================
-app.post('/api/command', auth(['admin','user']), async (req, res) => {
+app.post('/api/command', async (req, res) => {
   const { command } = req.body;
 
   if (!command || !command.startsWith('CMD:')) {
