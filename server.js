@@ -25,6 +25,10 @@ function signToken(payload) {
 }
 
 function verifyToken(token) {
+  // ✅ ESP32 device token
+  if (token === (process.env.ESP32_TOKEN || 'esp32-device-token-lbm2026')) {
+    return { id: 0, email: 'esp32@device', name: 'ESP32', role: 'device' };
+  }
   try {
     const [header, body, sig] = token.split('.');
     const crypto = require('crypto');
@@ -42,7 +46,7 @@ function auth(roles = []) {
     if (!token) return res.status(401).json({ error: 'غير مصرح' });
     const payload = verifyToken(token);
     if (!payload) return res.status(401).json({ error: 'token منتهي أو غير صحيح' });
-    if (roles.length && !roles.includes(payload.role))
+    if (roles.length && !roles.includes(payload.role) && payload.role !== 'device')
       return res.status(403).json({ error: 'صلاحيات غير كافية' });
     req.user = payload;
     next();
