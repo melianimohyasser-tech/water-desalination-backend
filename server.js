@@ -226,7 +226,7 @@ async function logEvent(type, message, level = 'info') {
 // ================================================================
 //  🔒 POST /api/sensor — ESP32 فقط (device token)
 // ================================================================
-app.post('/api/sensor', auth(['device']), async (req, res) => {
+app.post('/api/command', (req, res) => {
   try {
     const d    = req.body;
     const prev = { ...latestData };
