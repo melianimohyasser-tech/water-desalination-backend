@@ -1,7 +1,7 @@
-// ================================================================
-//  Water Desalination — Backend API v8
-//  🔒 الأمان: CORS + device auth + JWT من .env
-//  ⚡ الأداء: pending commands بدون DB + command/pending endpoint
+﻿// ================================================================
+//  Water Desalination â€” Backend API v8
+//  ðŸ”’ Ø§Ù„Ø£Ù…Ø§Ù†: CORS + device auth + JWT Ù…Ù† .env
+//  âš¡ Ø§Ù„Ø£Ø¯Ø§Ø¡: pending commands Ø¨Ø¯ÙˆÙ† DB + command/pending endpoint
 // ================================================================
 'use strict';
 
@@ -13,15 +13,15 @@ const crypto           = require('crypto');
 require('dotenv').config();
 
 // ================================================================
-//  🔒 تحقق من المتغيرات الأساسية عند الإقلاع
+//  ðŸ”’ ØªØ­Ù‚Ù‚ Ù…Ù† Ø§Ù„Ù…ØªØºÙŠØ±Ø§Øª Ø§Ù„Ø£Ø³Ø§Ø³ÙŠØ© Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ù‚Ù„Ø§Ø¹
 // ================================================================
-if (!process.env.JWT_SECRET)   { console.error('❌ JWT_SECRET مفقود في .env');   process.exit(1); }
-if (!process.env.ESP32_TOKEN)  { console.error('❌ ESP32_TOKEN مفقود في .env');  process.exit(1); }
-if (!process.env.TURSO_URL)    { console.error('❌ TURSO_URL مفقود في .env');    process.exit(1); }
-if (!process.env.TURSO_TOKEN)  { console.error('❌ TURSO_TOKEN مفقود في .env');  process.exit(1); }
+if (!process.env.JWT_SECRET)   { console.error('âŒ JWT_SECRET Ù…ÙÙ‚ÙˆØ¯ ÙÙŠ .env');   process.exit(1); }
+if (!process.env.ESP32_TOKEN)  { console.error('âŒ ESP32_TOKEN Ù…ÙÙ‚ÙˆØ¯ ÙÙŠ .env');  process.exit(1); }
+if (!process.env.TURSO_URL)    { console.error('âŒ TURSO_URL Ù…ÙÙ‚ÙˆØ¯ ÙÙŠ .env');    process.exit(1); }
+if (!process.env.TURSO_TOKEN)  { console.error('âŒ TURSO_TOKEN Ù…ÙÙ‚ÙˆØ¯ ÙÙŠ .env');  process.exit(1); }
 
 // ================================================================
-//  JWT — بدون مكتبة خارجية
+//  JWT â€” Ø¨Ø¯ÙˆÙ† Ù…ÙƒØªØ¨Ø© Ø®Ø§Ø±Ø¬ÙŠØ©
 // ================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -33,7 +33,7 @@ function signToken(payload) {
 }
 
 function verifyToken(token) {
-  // 🔒 ESP32 device token
+  // ðŸ”’ ESP32 device token
   if (token === process.env.ESP32_TOKEN)
     return { id: 0, email: 'esp32@device', name: 'ESP32', role: 'device' };
   try {
@@ -48,11 +48,11 @@ function auth(roles = []) {
   return (req, res, next) => {
     const h     = req.headers.authorization || '';
     const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'غير مصرح' });
+    if (!token) return res.status(401).json({ error: 'ØºÙŠØ± Ù…ØµØ±Ø­' });
     const payload = verifyToken(token);
-    if (!payload) return res.status(401).json({ error: 'token منتهي أو غير صحيح' });
+    if (!payload) return res.status(401).json({ error: 'token Ù…Ù†ØªÙ‡ÙŠ Ø£Ùˆ ØºÙŠØ± ØµØ­ÙŠØ­' });
     if (roles.length && !roles.includes(payload.role) && payload.role !== 'device')
-      return res.status(403).json({ error: 'صلاحيات غير كافية' });
+      return res.status(403).json({ error: 'ØµÙ„Ø§Ø­ÙŠØ§Øª ØºÙŠØ± ÙƒØ§ÙÙŠØ©' });
     req.user = payload;
     next();
   };
@@ -64,7 +64,7 @@ function auth(roles = []) {
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// 🔒 CORS — فقط الدومينات المسموح بها
+// ðŸ”’ CORS â€” ÙÙ‚Ø· Ø§Ù„Ø¯ÙˆÙ…ÙŠÙ†Ø§Øª Ø§Ù„Ù…Ø³Ù…ÙˆØ­ Ø¨Ù‡Ø§
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
@@ -133,7 +133,7 @@ async function initDB() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-  // Admin افتراضي
+  // Admin Ø§ÙØªØ±Ø§Ø¶ÙŠ
   const { rows } = await db.execute('SELECT COUNT(*) as n FROM users');
   if (rows[0].n === 0) {
     const adminPass = process.env.ADMIN_PASSWORD || 'LBM@2025';
@@ -142,7 +142,7 @@ async function initDB() {
       sql:  'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
       args: ['Administrator', 'admin@lbm.com', hash, 'admin'],
     });
-    console.log('✅ Admin أُنشئ: admin@lbm.com');
+    console.log('âœ… Admin Ø£ÙÙ†Ø´Ø¦: admin@lbm.com');
   }
 
   await db.execute(`
@@ -162,11 +162,11 @@ async function initDB() {
   for (const [k, v] of defaults)
     await db.execute({ sql: 'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', args: [k, v] });
 
-  console.log('✅ Turso جاهز');
+  console.log('âœ… Turso Ø¬Ø§Ù‡Ø²');
 }
 
 // ================================================================
-//  حالة النظام — في الذاكرة (سريع، بدون DB لكل طلب)
+//  Ø­Ø§Ù„Ø© Ø§Ù„Ù†Ø¸Ø§Ù… â€” ÙÙŠ Ø§Ù„Ø°Ø§ÙƒØ±Ø© (Ø³Ø±ÙŠØ¹ØŒ Ø¨Ø¯ÙˆÙ† DB Ù„ÙƒÙ„ Ø·Ù„Ø¨)
 // ================================================================
 let latestData = {
   ph:0, tds:0, turb1:0, turb2:0,
@@ -182,14 +182,14 @@ let latestData = {
   timestamp: new Date().toISOString(),
 };
 
-// ⚡ قائمة الأوامر في الذاكرة — بدون DB
+// âš¡ Ù‚Ø§Ø¦Ù…Ø© Ø§Ù„Ø£ÙˆØ§Ù…Ø± ÙÙŠ Ø§Ù„Ø°Ø§ÙƒØ±Ø© â€” Ø¨Ø¯ÙˆÙ† DB
 let pendingCommands  = [];
 let lastESP32Contact = null;
 let sys1StartTime    = null;
 let sys3StartTime    = null;
 let pumpSpeeds       = [150,150,150,200,150,150,150];
 
-// حماية المود من الكتابة الفورية
+// Ø­Ù…Ø§ÙŠØ© Ø§Ù„Ù…ÙˆØ¯ Ù…Ù† Ø§Ù„ÙƒØªØ§Ø¨Ø© Ø§Ù„ÙÙˆØ±ÙŠØ©
 let modeLocked      = false;
 let modeLockedValue = null;
 let modeLockTimer   = null;
@@ -224,7 +224,7 @@ async function logEvent(type, message, level = 'info') {
 }
 
 // ================================================================
-//  🔒 POST /api/sensor — ESP32 فقط (device token)
+//  ðŸ”’ POST /api/sensor â€” ESP32 ÙÙ‚Ø· (device token)
 // ================================================================
 app.post('/api/sensor', auth(['device']), async (req, res) => {
   try {
@@ -251,38 +251,38 @@ app.post('/api/sensor', auth(['device']), async (req, res) => {
     };
     lastESP32Contact = new Date();
 
-    // مؤقت النظام
+    // Ù…Ø¤Ù‚Øª Ø§Ù„Ù†Ø¸Ø§Ù…
     if (d.sys1 === 1 && !sys1StartTime) sys1StartTime = new Date();
     if (d.sys1 === 0 &&  sys1StartTime) sys1StartTime = null;
     if (d.sys3 === 1 && !sys3StartTime) sys3StartTime = new Date();
     if (d.sys3 === 0 &&  sys3StartTime) sys3StartTime = null;
 
-    // تسجيل التغييرات (فقط لما يتغير شيء)
-    if (prev.sys1  !== d.sys1)  logEvent('system', `النظام 1 ${d.sys1  ? 'بدأ' : 'توقف'}`,               d.sys1  ? 'info' : 'warning');
-    if (prev.sys3  !== d.sys3)  logEvent('system', `النظام 3 ${d.sys3  ? 'بدأ' : 'توقف'}`,               d.sys3  ? 'info' : 'warning');
-    if (prev.valve !== d.valve) logEvent('valve',  `الصمام ${d.valve ? 'فُتح' : 'أُغلق'}`,               'info');
-    if (prev.mode  !== d.mode)  logEvent('mode',   `وضع التشغيل: ${d.mode ? 'يدوي' : 'تلقائي'}`,        'info');
+    // ØªØ³Ø¬ÙŠÙ„ Ø§Ù„ØªØºÙŠÙŠØ±Ø§Øª (ÙÙ‚Ø· Ù„Ù…Ø§ ÙŠØªØºÙŠØ± Ø´ÙŠØ¡)
+    if (prev.sys1  !== d.sys1)  logEvent('system', `Ø§Ù„Ù†Ø¸Ø§Ù… 1 ${d.sys1  ? 'Ø¨Ø¯Ø£' : 'ØªÙˆÙ‚Ù'}`,               d.sys1  ? 'info' : 'warning');
+    if (prev.sys3  !== d.sys3)  logEvent('system', `Ø§Ù„Ù†Ø¸Ø§Ù… 3 ${d.sys3  ? 'Ø¨Ø¯Ø£' : 'ØªÙˆÙ‚Ù'}`,               d.sys3  ? 'info' : 'warning');
+    if (prev.valve !== d.valve) logEvent('valve',  `Ø§Ù„ØµÙ…Ø§Ù… ${d.valve ? 'ÙÙØªØ­' : 'Ø£ÙØºÙ„Ù‚'}`,               'info');
+    if (prev.mode  !== d.mode)  logEvent('mode',   `ÙˆØ¶Ø¹ Ø§Ù„ØªØ´ØºÙŠÙ„: ${d.mode ? 'ÙŠØ¯ÙˆÙŠ' : 'ØªÙ„Ù‚Ø§Ø¦ÙŠ'}`,        'info');
 
-    const filterNames = ['فلتر 1 (P1)', 'فلتر 2 (P2)', 'فلتر 3 (P5)', 'فلتر 4 (P6)'];
+    const filterNames = ['ÙÙ„ØªØ± 1 (P1)', 'ÙÙ„ØªØ± 2 (P2)', 'ÙÙ„ØªØ± 3 (P5)', 'ÙÙ„ØªØ± 4 (P6)'];
     const fFields  = ['f1','f2','f3','f4'];
     const fwFields = ['fw1','fw2','fw3','fw4'];
     for (let i = 0; i < 4; i++) {
       if (prev[fFields[i]] !== d[fFields[i]]) {
-        if (d[fFields[i]]) logEvent('filter', `${filterNames[i]} منسد — تم إيقاف المضخة`, 'warning');
-        else               logEvent('filter', `${filterNames[i]} تم تنظيفه`, 'info');
+        if (d[fFields[i]]) logEvent('filter', `${filterNames[i]} Ù…Ù†Ø³Ø¯ â€” ØªÙ… Ø¥ÙŠÙ‚Ø§Ù Ø§Ù„Ù…Ø¶Ø®Ø©`, 'warning');
+        else               logEvent('filter', `${filterNames[i]} ØªÙ… ØªÙ†Ø¸ÙŠÙÙ‡`, 'info');
       }
       if (prev[fwFields[i]] !== d[fwFields[i]] && d[fwFields[i]])
-        logEvent('filter', `${filterNames[i]} ينتظر إعادة التشغيل (15s)`, 'info');
+        logEvent('filter', `${filterNames[i]} ÙŠÙ†ØªØ¸Ø± Ø¥Ø¹Ø§Ø¯Ø© Ø§Ù„ØªØ´ØºÙŠÙ„ (15s)`, 'info');
     }
-    if (prev.stopping  !== d.stopping  && d.stopping)  logEvent('system', 'إيقاف تدريجي لنظام 1 بدأ', 'warning');
-    if (prev.stopping3 !== d.stopping3 && d.stopping3) logEvent('system', 'إيقاف تدريجي لنظام 3 بدأ', 'warning');
+    if (prev.stopping  !== d.stopping  && d.stopping)  logEvent('system', 'Ø¥ÙŠÙ‚Ø§Ù ØªØ¯Ø±ÙŠØ¬ÙŠ Ù„Ù†Ø¸Ø§Ù… 1 Ø¨Ø¯Ø£', 'warning');
+    if (prev.stopping3 !== d.stopping3 && d.stopping3) logEvent('system', 'Ø¥ÙŠÙ‚Ø§Ù ØªØ¯Ø±ÙŠØ¬ÙŠ Ù„Ù†Ø¸Ø§Ù… 3 Ø¨Ø¯Ø£', 'warning');
 
-    // تنبيهات الحساسات
-    if (d.ph > 0 && (d.ph < 6.5 || d.ph > 8.5)) logEvent('alert', `pH غير طبيعي: ${Number(d.ph).toFixed(2)}`, 'danger');
-    if (d.tds > 500)                              logEvent('alert', `TDS مرتفع: ${Number(d.tds).toFixed(0)} ppm`, 'warning');
-    if (d.pres1 > 10 || d.pres2 > 10)            logEvent('alert', `ضغط خطير: ${Math.max(d.pres1, d.pres2).toFixed(1)} bar`, 'danger');
+    // ØªÙ†Ø¨ÙŠÙ‡Ø§Øª Ø§Ù„Ø­Ø³Ø§Ø³Ø§Øª
+    if (d.ph > 0 && (d.ph < 6.5 || d.ph > 8.5)) logEvent('alert', `pH ØºÙŠØ± Ø·Ø¨ÙŠØ¹ÙŠ: ${Number(d.ph).toFixed(2)}`, 'danger');
+    if (d.tds > 500)                              logEvent('alert', `TDS Ù…Ø±ØªÙØ¹: ${Number(d.tds).toFixed(0)} ppm`, 'warning');
+    if (d.pres1 > 10 || d.pres2 > 10)            logEvent('alert', `Ø¶ØºØ· Ø®Ø·ÙŠØ±: ${Math.max(d.pres1, d.pres2).toFixed(1)} bar`, 'danger');
 
-    // حفظ في DB (fire & forget — لا ننتظر)
+    // Ø­ÙØ¸ ÙÙŠ DB (fire & forget â€” Ù„Ø§ Ù†Ù†ØªØ¸Ø±)
     db.execute({
       sql: `INSERT INTO sensor_data
               (ph,tds,turb1,turb2,pres1,pres2,flow1,flow2,
@@ -301,7 +301,7 @@ app.post('/api/sensor', auth(['device']), async (req, res) => {
       ],
     }).catch(() => {});
 
-    // ⚡ رد فوري بالأوامر المعلقة
+    // âš¡ Ø±Ø¯ ÙÙˆØ±ÙŠ Ø¨Ø§Ù„Ø£ÙˆØ§Ù…Ø± Ø§Ù„Ù…Ø¹Ù„Ù‚Ø©
     const cmds      = [...pendingCommands];
     pendingCommands = [];
     res.json({ status: 'ok', commands: cmds });
@@ -319,7 +319,7 @@ app.get('/api/sensor/latest', (req, res) => {
 });
 
 // ================================================================
-//  ⚡ GET /api/command/pending — ESP32 فقط (polling سريع بدون DB)
+//  âš¡ GET /api/command/pending â€” ESP32 ÙÙ‚Ø· (polling Ø³Ø±ÙŠØ¹ Ø¨Ø¯ÙˆÙ† DB)
 // ================================================================
 app.get('/api/command/pending', auth(['device']), (req, res) => {
   const cmds      = [...pendingCommands];
@@ -406,7 +406,7 @@ app.get('/api/settings', async (req, res) => {
 });
 
 // ================================================================
-//  🔒 POST /api/settings — admin فقط
+//  ðŸ”’ POST /api/settings â€” admin ÙÙ‚Ø·
 // ================================================================
 app.post('/api/settings', auth(['admin']), async (req, res) => {
   try {
@@ -415,7 +415,7 @@ app.post('/api/settings', auth(['admin']), async (req, res) => {
       await db.execute({ sql: 'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', args: [key, String(value)] });
     if (updates.pump_speeds)
       pumpSpeeds = updates.pump_speeds.split(',').map(Number);
-    logEvent('settings', 'تم تحديث الإعدادات', 'info');
+    logEvent('settings', 'ØªÙ… ØªØ­Ø¯ÙŠØ« Ø§Ù„Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª', 'info');
     res.json({ status: 'ok' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -432,14 +432,14 @@ app.get('/api/timer', (req, res) => {
 });
 
 // ================================================================
-//  🔒 POST /api/command — user أو admin فقط
+//  ðŸ”’ POST /api/command â€” user Ø£Ùˆ admin ÙÙ‚Ø·
 // ================================================================
 app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
   const { command } = req.body;
   if (!command || !command.startsWith('CMD:'))
-    return res.status(400).json({ error: 'أمر غير صالح' });
+    return res.status(400).json({ error: 'Ø£Ù…Ø± ØºÙŠØ± ØµØ§Ù„Ø­' });
 
-  // أوامر السرعة: CMD:SPEED:1:80
+  // Ø£ÙˆØ§Ù…Ø± Ø§Ù„Ø³Ø±Ø¹Ø©: CMD:SPEED:1:80
   if (command.startsWith('CMD:SPEED:')) {
     const parts    = command.split(':');
     const pumpIdx  = parseInt(parts[2]);
@@ -448,10 +448,10 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
       pendingCommands.push(command);
       pumpSpeeds[pumpIdx - 1] = speed;
       db.execute({ sql: "INSERT OR REPLACE INTO settings (key, value) VALUES ('pump_speeds', ?)", args: [pumpSpeeds.join(',')] }).catch(() => {});
-      logEvent('command', `سرعة P${pumpIdx} = ${speed} — ${req.user.name}`, 'info');
+      logEvent('command', `Ø³Ø±Ø¹Ø© P${pumpIdx} = ${speed} â€” ${req.user.name}`, 'info');
       return res.json({ status: 'ok', queued: command });
     }
-    return res.status(400).json({ error: 'صيغة أمر السرعة خاطئة' });
+    return res.status(400).json({ error: 'ØµÙŠØºØ© Ø£Ù…Ø± Ø§Ù„Ø³Ø±Ø¹Ø© Ø®Ø§Ø·Ø¦Ø©' });
   }
 
   const valid = [
@@ -464,11 +464,11 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
     'CMD:MODE_AUTO','CMD:MODE_MANUAL',
   ];
   if (!valid.includes(command))
-    return res.status(400).json({ error: 'أمر غير مسموح' });
+    return res.status(400).json({ error: 'Ø£Ù…Ø± ØºÙŠØ± Ù…Ø³Ù…ÙˆØ­' });
 
   pendingCommands.push(command);
 
-  // حماية المود
+  // Ø­Ù…Ø§ÙŠØ© Ø§Ù„Ù…ÙˆØ¯
   if (command === 'CMD:MODE_MANUAL' || command === 'CMD:MODE_AUTO') {
     const newMode   = command === 'CMD:MODE_MANUAL' ? 1 : 0;
     modeLocked      = true;
@@ -478,7 +478,7 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
     modeLockTimer = setTimeout(() => { modeLocked = false; modeLockedValue = null; }, MODE_LOCK_MS);
   }
 
-  logEvent('command', `${command} — ${req.user.name}`, 'info');
+  logEvent('command', `${command} â€” ${req.user.name}`, 'info');
   res.json({ status: 'ok', queued: command });
 });
 
@@ -502,20 +502,20 @@ app.get('/api/alerts', async (req, res) => {
 
   const alerts = [];
   const d = latestData;
-  if (d.ph < ph_min || d.ph > ph_max)       alerts.push({ level:'danger',  message:`pH غير طبيعي: ${d.ph}`,        field:'ph' });
-  if (d.tds > tds_warn)                      alerts.push({ level:'warning', message:`TDS مرتفع: ${d.tds} ppm`,      field:'tds' });
-  if (d.turb1 > turb_warn || d.turb2 > turb_warn) alerts.push({ level:'warning', message:'عكارة مرتفعة',           field:'turbidity' });
-  if (d.pres1 > pres_max  || d.pres2 > pres_max)  alerts.push({ level:'danger',  message:'ضغط خطير!',              field:'pressure' });
-  if (d.tank1 < tank_low)                    alerts.push({ level:'warning', message:`خزان 1 شبه فارغ: ${d.tank1}%`, field:'tank1' });
-  if (d.tank4 > tank_full)                   alerts.push({ level:'info',    message:`خزان 4 ممتلئ: ${d.tank4}%`,    field:'tank4' });
+  if (d.ph < ph_min || d.ph > ph_max)       alerts.push({ level:'danger',  message:`pH ØºÙŠØ± Ø·Ø¨ÙŠØ¹ÙŠ: ${d.ph}`,        field:'ph' });
+  if (d.tds > tds_warn)                      alerts.push({ level:'warning', message:`TDS Ù…Ø±ØªÙØ¹: ${d.tds} ppm`,      field:'tds' });
+  if (d.turb1 > turb_warn || d.turb2 > turb_warn) alerts.push({ level:'warning', message:'Ø¹ÙƒØ§Ø±Ø© Ù…Ø±ØªÙØ¹Ø©',           field:'turbidity' });
+  if (d.pres1 > pres_max  || d.pres2 > pres_max)  alerts.push({ level:'danger',  message:'Ø¶ØºØ· Ø®Ø·ÙŠØ±!',              field:'pressure' });
+  if (d.tank1 < tank_low)                    alerts.push({ level:'warning', message:`Ø®Ø²Ø§Ù† 1 Ø´Ø¨Ù‡ ÙØ§Ø±Øº: ${d.tank1}%`, field:'tank1' });
+  if (d.tank4 > tank_full)                   alerts.push({ level:'info',    message:`Ø®Ø²Ø§Ù† 4 Ù…Ù…ØªÙ„Ø¦: ${d.tank4}%`,    field:'tank4' });
 
   const filterLabels = ['P1','P2','P5','P6'];
   for (let i = 0; i < 4; i++) {
-    if (d[`f${i+1}`])  alerts.push({ level:'warning', message:`فلتر ${filterLabels[i]} منسد — المضخة متوقفة`, field:`filter${i+1}` });
-    if (d[`fw${i+1}`]) alerts.push({ level:'info',    message:`فلتر ${filterLabels[i]} ينتظر إعادة التشغيل`,  field:`filter${i+1}` });
+    if (d[`f${i+1}`])  alerts.push({ level:'warning', message:`ÙÙ„ØªØ± ${filterLabels[i]} Ù…Ù†Ø³Ø¯ â€” Ø§Ù„Ù…Ø¶Ø®Ø© Ù…ØªÙˆÙ‚ÙØ©`, field:`filter${i+1}` });
+    if (d[`fw${i+1}`]) alerts.push({ level:'info',    message:`ÙÙ„ØªØ± ${filterLabels[i]} ÙŠÙ†ØªØ¸Ø± Ø¥Ø¹Ø§Ø¯Ø© Ø§Ù„ØªØ´ØºÙŠÙ„`,  field:`filter${i+1}` });
   }
-  if (d.stopping)  alerts.push({ level:'info', message:'نظام 1 في وضع الإيقاف التدريجي', field:'stopping' });
-  if (d.stopping3) alerts.push({ level:'info', message:'نظام 3 في وضع الإيقاف التدريجي', field:'stopping3' });
+  if (d.stopping)  alerts.push({ level:'info', message:'Ù†Ø¸Ø§Ù… 1 ÙÙŠ ÙˆØ¶Ø¹ Ø§Ù„Ø¥ÙŠÙ‚Ø§Ù Ø§Ù„ØªØ¯Ø±ÙŠØ¬ÙŠ', field:'stopping' });
+  if (d.stopping3) alerts.push({ level:'info', message:'Ù†Ø¸Ø§Ù… 3 ÙÙŠ ÙˆØ¶Ø¹ Ø§Ù„Ø¥ÙŠÙ‚Ø§Ù Ø§Ù„ØªØ¯Ø±ÙŠØ¬ÙŠ', field:'stopping3' });
 
   res.json({ count: alerts.length, alerts });
 });
@@ -534,15 +534,15 @@ app.get('/api/esp32/status', (req, res) => {
 // ================================================================
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'أدخل الإيميل والباسوورد' });
+  if (!email || !password) return res.status(400).json({ error: 'Ø£Ø¯Ø®Ù„ Ø§Ù„Ø¥ÙŠÙ…ÙŠÙ„ ÙˆØ§Ù„Ø¨Ø§Ø³ÙˆÙˆØ±Ø¯' });
   try {
     const { rows } = await db.execute({ sql: 'SELECT * FROM users WHERE email = ? AND active = 1', args: [email.toLowerCase()] });
     const user = rows[0];
-    if (!user) return res.status(401).json({ error: 'إيميل أو باسوورد غلط' });
+    if (!user) return res.status(401).json({ error: 'Ø¥ÙŠÙ…ÙŠÙ„ Ø£Ùˆ Ø¨Ø§Ø³ÙˆÙˆØ±Ø¯ ØºÙ„Ø·' });
     const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(401).json({ error: 'إيميل أو باسوورد غلط' });
+    if (!ok) return res.status(401).json({ error: 'Ø¥ÙŠÙ…ÙŠÙ„ Ø£Ùˆ Ø¨Ø§Ø³ÙˆÙˆØ±Ø¯ ØºÙ„Ø·' });
     const token = signToken({ id: user.id, email: user.email, name: user.name, role: user.role });
-    logEvent('auth', `دخول: ${user.name} (${user.role})`, 'info');
+    logEvent('auth', `Ø¯Ø®ÙˆÙ„: ${user.name} (${user.role})`, 'info');
     res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -553,7 +553,7 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/auth/me', auth(), (req, res) => res.json({ user: req.user }));
 
 // ================================================================
-//  GET /api/users — admin فقط
+//  GET /api/users â€” admin ÙÙ‚Ø·
 // ================================================================
 app.get('/api/users', auth(['admin']), async (req, res) => {
   try {
@@ -563,25 +563,25 @@ app.get('/api/users', auth(['admin']), async (req, res) => {
 });
 
 // ================================================================
-//  POST /api/users — admin فقط
+//  POST /api/users â€” admin ÙÙ‚Ø·
 // ================================================================
 app.post('/api/users', auth(['admin']), async (req, res) => {
   const { name, email, password, role } = req.body;
-  if (!name || !email || !password) return res.status(400).json({ error: 'اسم وإيميل وباسوورد مطلوبين' });
+  if (!name || !email || !password) return res.status(400).json({ error: 'Ø§Ø³Ù… ÙˆØ¥ÙŠÙ…ÙŠÙ„ ÙˆØ¨Ø§Ø³ÙˆÙˆØ±Ø¯ Ù…Ø·Ù„ÙˆØ¨ÙŠÙ†' });
   const userRole = ['admin','user','guest'].includes(role) ? role : 'guest';
   try {
     const hash = await bcrypt.hash(password, 10);
     await db.execute({ sql: 'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)', args: [name, email.toLowerCase(), hash, userRole] });
-    logEvent('auth', `مستخدم جديد: ${name} (${userRole})`, 'info');
-    res.json({ status: 'ok', message: `تم إنشاء ${name}` });
+    logEvent('auth', `Ù…Ø³ØªØ®Ø¯Ù… Ø¬Ø¯ÙŠØ¯: ${name} (${userRole})`, 'info');
+    res.json({ status: 'ok', message: `ØªÙ… Ø¥Ù†Ø´Ø§Ø¡ ${name}` });
   } catch (err) {
-    if (err.message.includes('UNIQUE')) return res.status(400).json({ error: 'الإيميل مستعمل' });
+    if (err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Ø§Ù„Ø¥ÙŠÙ…ÙŠÙ„ Ù…Ø³ØªØ¹Ù…Ù„' });
     res.status(500).json({ error: err.message });
   }
 });
 
 // ================================================================
-//  PUT /api/users/:id — admin فقط
+//  PUT /api/users/:id â€” admin ÙÙ‚Ø·
 // ================================================================
 app.put('/api/users/:id', auth(['admin']), async (req, res) => {
   const { name, role, active, password } = req.body;
@@ -596,11 +596,11 @@ app.put('/api/users/:id', auth(['admin']), async (req, res) => {
 });
 
 // ================================================================
-//  DELETE /api/users/:id — admin فقط
+//  DELETE /api/users/:id â€” admin ÙÙ‚Ø·
 // ================================================================
 app.delete('/api/users/:id', auth(['admin']), async (req, res) => {
   const id = parseInt(req.params.id);
-  if (id === req.user.id) return res.status(400).json({ error: 'لا تقدر تحذف حسابك' });
+  if (id === req.user.id) return res.status(400).json({ error: 'Ù„Ø§ ØªÙ‚Ø¯Ø± ØªØ­Ø°Ù Ø­Ø³Ø§Ø¨Ùƒ' });
   try {
     await db.execute({ sql: 'DELETE FROM users WHERE id = ?', args: [id] });
     res.json({ status: 'ok' });
@@ -615,7 +615,7 @@ app.get('/health', (req, res) => {
 });
 
 // ================================================================
-//  Self-ping — يحافظ على Render مستيقظاً
+//  Self-ping â€” ÙŠØ­Ø§ÙØ¸ Ø¹Ù„Ù‰ Render Ù…Ø³ØªÙŠÙ‚Ø¸Ø§Ù‹
 // ================================================================
 const https = require('https');
 setInterval(() => {
@@ -629,11 +629,11 @@ setInterval(() => {
 // ================================================================
 initDB().then(() => {
   app.listen(PORT, () => {
-    console.log(`🚀 الخادم يعمل على المنفذ ${PORT}`);
-    console.log(`🔗 http://localhost:${PORT}/health`);
+    console.log(`ðŸš€ Ø§Ù„Ø®Ø§Ø¯Ù… ÙŠØ¹Ù…Ù„ Ø¹Ù„Ù‰ Ø§Ù„Ù…Ù†ÙØ° ${PORT}`);
+    console.log(`ðŸ”— http://localhost:${PORT}/health`);
   });
 }).catch(err => {
-  console.error('❌ Turso:', err.message);
+  console.error('âŒ Turso:', err.message);
   process.exit(1);
 });
 
