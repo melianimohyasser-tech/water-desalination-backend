@@ -1,5 +1,9 @@
 // ================================================================
-//  Water Desalination — Backend API v8
+//  Water Desalination — Backend API v9
+//  ✅ v9: تحكم بسرعة المضخات في المود مانيال فقط
+//         - OFF=0 / LOW=90 / MEDIUM=150 / HIGH=255
+//         - Pump 4 لا تدعم تغيير السرعة (ON/OFF فقط)
+//         - CMD:LEVEL:P:VALUE (new) بالإضافة إلى CMD:SPEED
 //  🔒 الأمان: CORS + device auth + JWT من .env
 //  ⚡ الأداء: pending commands بدون DB + command/pending endpoint
 // ================================================================
@@ -12,17 +16,11 @@ const bcrypt           = require('bcryptjs');
 const crypto           = require('crypto');
 require('dotenv').config();
 
-// ================================================================
-//  🔒 تحقق من المتغيرات الأساسية عند الإقلاع
-// ================================================================
-if (!process.env.JWT_SECRET)   { console.error('❌ JWT_SECRET مفقود في .env');   process.exit(1); }
-if (!process.env.ESP32_TOKEN)  { console.error('❌ ESP32_TOKEN مفقود في .env');  process.exit(1); }
-if (!process.env.TURSO_URL)    { console.error('❌ TURSO_URL مفقود في .env');    process.exit(1); }
-if (!process.env.TURSO_TOKEN)  { console.error('❌ TURSO_TOKEN مفقود في .env');  process.exit(1); }
+if (!process.env.JWT_SECRET)   { console.error('JWT_SECRET missing'); process.exit(1); }
+if (!process.env.ESP32_TOKEN)  { console.error('ESP32_TOKEN missing'); process.exit(1); }
+if (!process.env.TURSO_URL)    { console.error('TURSO_URL missing'); process.exit(1); }
+if (!process.env.TURSO_TOKEN)  { console.error('TURSO_TOKEN missing'); process.exit(1); }
 
-// ================================================================
-//  JWT — بدون مكتبة خارجية
-// ================================================================
 const JWT_SECRET = process.env.JWT_SECRET;
 
 function signToken(payload) {
@@ -33,7 +31,6 @@ function signToken(payload) {
 }
 
 function verifyToken(token) {
-  // 🔒 ESP32 device token
   if (token === process.env.ESP32_TOKEN)
     return { id: 0, email: 'esp32@device', name: 'ESP32', role: 'device' };
   try {
@@ -58,13 +55,9 @@ function auth(roles = []) {
   };
 }
 
-// ================================================================
-//  Express
-// ================================================================
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// 🔒 CORS — فقط الدومينات المسموح بها
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
@@ -74,7 +67,7 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // ESP32 / mobile / local
+    if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`CORS blocked: ${origin}`));
   },
@@ -83,9 +76,6 @@ app.use(cors({
 
 app.use(express.json({ limit: '50kb' }));
 
-// ================================================================
-//  Turso DB
-// ================================================================
 const db = createClient({
   url:       process.env.TURSO_URL,
   authToken: process.env.TURSO_TOKEN,
@@ -133,7 +123,6 @@ async function initDB() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-  // Admin افتراضي
   const { rows } = await db.execute('SELECT COUNT(*) as n FROM users');
   if (rows[0].n === 0) {
     const adminPass = process.env.ADMIN_PASSWORD || 'LBM@2025';
@@ -142,7 +131,7 @@ async function initDB() {
       sql:  'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
       args: ['Administrator', 'admin@lbm.com', hash, 'admin'],
     });
-    console.log('✅ Admin أُنشئ: admin@lbm.com');
+    console.log('✅ Admin: admin@lbm.com');
   }
 
   await db.execute(`
@@ -166,7 +155,7 @@ async function initDB() {
 }
 
 // ================================================================
-//  حالة النظام — في الذاكرة (سريع، بدون DB لكل طلب)
+//  حالة النظام في الذاكرة
 // ================================================================
 let latestData = {
   ph:0, tds:0, turb1:0, turb2:0,
@@ -182,23 +171,29 @@ let latestData = {
   timestamp: new Date().toISOString(),
 };
 
-// ⚡ قائمة الأوامر في الذاكرة — بدون DB
 let pendingCommands  = [];
 let lastESP32Contact = null;
 let sys1StartTime    = null;
 let sys3StartTime    = null;
-let pumpSpeeds       = [150,150,150,200,150,150,150];
+// P4 محمية — لا تتغير من CMD:LEVEL
+let pumpSpeeds = [150, 150, 150, 200, 150, 150, 150];
 
-// حماية المود من الكتابة الفورية
 let modeLocked      = false;
 let modeLockedValue = null;
 let modeLockTimer   = null;
 const MODE_LOCK_MS  = 15000;
 
+// ================================================================
+//  ✅ v9: مستويات السرعة
+//  التطبيق/ويب: OFF=0, LOW=90, MEDIUM=150, HIGH=255
+//  الشاشة Nextion: OFF=0, ON=150 (لا تتغير)
+// ================================================================
+const SPEED_LEVELS = { off: 0, low: 90, medium: 150, high: 255 };
+
 function pumpLevel(speed) {
-  if (speed === 0)    return 'off';
-  if (speed <= 84)    return 'low';
-  if (speed <= 169)   return 'medium';
+  if (speed === 0)   return 'off';
+  if (speed <= 90)   return 'low';
+  if (speed <= 150)  return 'medium';
   return 'high';
 }
 
@@ -224,7 +219,7 @@ async function logEvent(type, message, level = 'info') {
 }
 
 // ================================================================
-//  🔒 POST /api/sensor — ESP32 فقط (device token)
+//  POST /api/sensor — ESP32 فقط
 // ================================================================
 app.post('/api/sensor', auth(['device']), (req, res) => {
   try {
@@ -251,16 +246,14 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
     };
     lastESP32Contact = new Date();
 
-    // مؤقت النظام
     if (d.sys1 === 1 && !sys1StartTime) sys1StartTime = new Date();
     if (d.sys1 === 0 &&  sys1StartTime) sys1StartTime = null;
     if (d.sys3 === 1 && !sys3StartTime) sys3StartTime = new Date();
     if (d.sys3 === 0 &&  sys3StartTime) sys3StartTime = null;
 
-    // تسجيل التغييرات (فقط لما يتغير شيء)
-    if (prev.sys1  !== d.sys1)  logEvent('system', `النظام 1 ${d.sys1  ? 'بدأ' : 'توقف'}`,               d.sys1  ? 'info' : 'warning');
-    if (prev.sys3  !== d.sys3)  logEvent('system', `النظام 3 ${d.sys3  ? 'بدأ' : 'توقف'}`,               d.sys3  ? 'info' : 'warning');
-    if (prev.valve !== d.valve) logEvent('valve',  `الصمام ${d.valve ? 'فُتح' : 'أُغلق'}`,               'info');
+    if (prev.sys1  !== d.sys1)  logEvent('system', `النظام 1 ${d.sys1  ? 'بدأ' : 'توقف'}`, d.sys1  ? 'info' : 'warning');
+    if (prev.sys3  !== d.sys3)  logEvent('system', `النظام 3 ${d.sys3  ? 'بدأ' : 'توقف'}`, d.sys3  ? 'info' : 'warning');
+    if (prev.valve !== d.valve) logEvent('valve',  `الصمام ${d.valve ? 'فُتح' : 'أُغلق'}`, 'info');
     if (prev.mode  !== effectiveMode) logEvent('mode', `وضع التشغيل: ${effectiveMode ? 'يدوي' : 'تلقائي'}`, 'info');
 
     const filterNames = ['فلتر 1 (P1)', 'فلتر 2 (P2)', 'فلتر 3 (P5)', 'فلتر 4 (P6)'];
@@ -277,12 +270,10 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
     if (prev.stopping  !== d.stopping  && d.stopping)  logEvent('system', 'إيقاف تدريجي لنظام 1 بدأ', 'warning');
     if (prev.stopping3 !== d.stopping3 && d.stopping3) logEvent('system', 'إيقاف تدريجي لنظام 3 بدأ', 'warning');
 
-    // تنبيهات الحساسات
     if (d.ph > 0 && (d.ph < 6.5 || d.ph > 8.5)) logEvent('alert', `pH غير طبيعي: ${Number(d.ph).toFixed(2)}`, 'danger');
     if (d.tds > 500)                              logEvent('alert', `TDS مرتفع: ${Number(d.tds).toFixed(0)} ppm`, 'warning');
     if (d.pres1 > 10 || d.pres2 > 10)            logEvent('alert', `ضغط خطير: ${Math.max(d.pres1, d.pres2).toFixed(1)} bar`, 'danger');
 
-    // حفظ في DB (fire & forget — لا ننتظر)
     db.execute({
       sql: `INSERT INTO sensor_data
               (ph,tds,turb1,turb2,pres1,pres2,flow1,flow2,
@@ -301,7 +292,6 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
       ],
     }).catch(() => {});
 
-    // ⚡ رد فوري بالأوامر المعلقة
     const cmds      = [...pendingCommands];
     pendingCommands = [];
     res.json({ status: 'ok', commands: cmds });
@@ -319,7 +309,7 @@ app.get('/api/sensor/latest', (req, res) => {
 });
 
 // ================================================================
-//  ⚡ GET /api/command/pending — ESP32 فقط (polling سريع بدون DB)
+//  GET /api/command/pending — ESP32 فقط
 // ================================================================
 app.get('/api/command/pending', auth(['device']), (req, res) => {
   const cmds      = [...pendingCommands];
@@ -406,7 +396,7 @@ app.get('/api/settings', async (req, res) => {
 });
 
 // ================================================================
-//  🔒 POST /api/settings — admin فقط
+//  POST /api/settings — admin فقط
 // ================================================================
 app.post('/api/settings', auth(['admin']), async (req, res) => {
   try {
@@ -432,50 +422,88 @@ app.get('/api/timer', (req, res) => {
 });
 
 // ================================================================
-//  🔒 POST /api/command — user أو admin فقط
+//  POST /api/command — user أو admin فقط
 // ================================================================
 app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
   const { command } = req.body;
   if (!command || !command.startsWith('CMD:'))
     return res.status(400).json({ error: 'أمر غير صالح' });
 
-  // أوامر السرعة: CMD:SPEED:1:80
+  // ================================================================
+  //  ✅ v9: CMD:SPEED:P:VALUE — سرعة خام 0-255
+  //  Pump 4 محمية | المود مانيال فقط
+  // ================================================================
   if (command.startsWith('CMD:SPEED:')) {
-    const parts    = command.split(':');
-    const pumpIdx  = parseInt(parts[2]);
-    const speed    = parseInt(parts[3]);
-    if (parts.length === 4 && pumpIdx >= 1 && pumpIdx <= 7 && speed >= 0 && speed <= 255) {
-      pendingCommands.push(command);
-      pumpSpeeds[pumpIdx - 1] = speed;
-      db.execute({ sql: "INSERT OR REPLACE INTO settings (key, value) VALUES ('pump_speeds', ?)", args: [pumpSpeeds.join(',')] }).catch(() => {});
-      logEvent('command', `سرعة P${pumpIdx} = ${speed} — ${req.user.name}`, 'info');
-      return res.json({ status: 'ok', queued: command });
-    }
-    return res.status(400).json({ error: 'صيغة أمر السرعة خاطئة' });
+    const parts   = command.split(':');
+    const pumpIdx = parseInt(parts[2]);
+    const speed   = parseInt(parts[3]);
+
+    if (parts.length !== 4 || pumpIdx < 1 || pumpIdx > 7 || isNaN(speed) || speed < 0 || speed > 255)
+      return res.status(400).json({ error: 'صيغة أمر السرعة خاطئة' });
+
+    if (pumpIdx === 4)
+      return res.status(400).json({ error: 'المضخة 4 تشتغل ON/OFF فقط' });
+
+    if (!latestData.mode)
+      return res.status(403).json({ error: 'تغيير السرعة متاح في المود مانيال فقط' });
+
+    pendingCommands.push(command);
+    pumpSpeeds[pumpIdx - 1] = speed;
+    db.execute({ sql: "INSERT OR REPLACE INTO settings (key, value) VALUES ('pump_speeds', ?)", args: [pumpSpeeds.join(',')] }).catch(() => {});
+    logEvent('command', `سرعة P${pumpIdx} = ${speed} (${pumpLevel(speed)}) — ${req.user.name}`, 'info');
+    return res.json({ status: 'ok', queued: command, level: pumpLevel(speed) });
   }
 
+  // ================================================================
+  //  ✅ v9: CMD:LEVEL:P:LEVEL — off/low/medium/high
+  //  يُترجم إلى CMD:SPEED للميقا
+  //  Pump 4 محمية | المود مانيال فقط
+  // ================================================================
+  if (command.startsWith('CMD:LEVEL:')) {
+    const parts     = command.split(':');
+    const pumpIdx   = parseInt(parts[2]);
+    const levelName = parts[3]?.toLowerCase();
+
+    if (parts.length !== 4 || pumpIdx < 1 || pumpIdx > 7 || !(levelName in SPEED_LEVELS))
+      return res.status(400).json({ error: 'صيغة خاطئة — استخدم: off/low/medium/high' });
+
+    if (pumpIdx === 4)
+      return res.status(400).json({ error: 'المضخة 4 تشتغل ON/OFF فقط' });
+
+    if (!latestData.mode)
+      return res.status(403).json({ error: 'تغيير المستوى متاح في المود مانيال فقط' });
+
+    const speed    = SPEED_LEVELS[levelName];
+    const speedCmd = `CMD:SPEED:${pumpIdx}:${speed}`;
+    pendingCommands.push(speedCmd);
+    pumpSpeeds[pumpIdx - 1] = speed;
+    db.execute({ sql: "INSERT OR REPLACE INTO settings (key, value) VALUES ('pump_speeds', ?)", args: [pumpSpeeds.join(',')] }).catch(() => {});
+    logEvent('command', `مستوى P${pumpIdx} = ${levelName} (${speed}) — ${req.user.name}`, 'info');
+    return res.json({ status: 'ok', queued: speedCmd, level: levelName, speed });
+  }
+
+  // ================================================================
+  //  الأوامر الأساسية
+  // ================================================================
   const valid = [
     'CMD:PUMP1_ON','CMD:PUMP1_OFF','CMD:PUMP2_ON','CMD:PUMP2_OFF',
     'CMD:PUMP3_ON','CMD:PUMP3_OFF','CMD:PUMP4_ON','CMD:PUMP4_OFF',
     'CMD:PUMP5_ON','CMD:PUMP5_OFF','CMD:PUMP6_ON','CMD:PUMP6_OFF',
     'CMD:PUMP7_ON','CMD:PUMP7_OFF',
-    'CMD:START','CMD:STOP','CMD:START3',
+    'CMD:START','CMD:STOP','CMD:START3','CMD:STOP3',
     'CMD:VALVE_ON','CMD:VALVE_OFF',
     'CMD:MODE_AUTO','CMD:MODE_MANUAL',
   ];
   if (!valid.includes(command))
     return res.status(400).json({ error: 'أمر غير مسموح' });
 
-  // ✅ حماية إضافية: في المود الأوتو، لا يُسمح بأوامر المضخات الفردية
-  const isAutoMode = !latestData.mode; // mode=0 → auto
-  const isPumpIndividualCmd = /^CMD:PUMP[1-7]_(ON|OFF)$/.test(command);
-  if (isAutoMode && isPumpIndividualCmd) {
-    return res.status(403).json({ error: 'لا يمكن تشغيل مضخة فردية في وضع الأوتو — استخدم CMD:START أو CMD:STOP' });
-  }
+  const isAutoMode       = !latestData.mode;
+  const isPumpIndividual = /^CMD:PUMP[1-7]_(ON|OFF)$/.test(command);
+  if (isAutoMode && isPumpIndividual)
+    return res.status(403).json({ error: 'لا يمكن تشغيل مضخة فردية في الأوتو' });
 
   pendingCommands.push(command);
 
-  // حماية المود
   if (command === 'CMD:MODE_MANUAL' || command === 'CMD:MODE_AUTO') {
     const newMode   = command === 'CMD:MODE_MANUAL' ? 1 : 0;
     modeLocked      = true;
@@ -487,6 +515,26 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
 
   logEvent('command', `${command} — ${req.user.name}`, 'info');
   res.json({ status: 'ok', queued: command });
+});
+
+// ================================================================
+//  GET /api/pump-levels — مستويات السرعة الحالية
+// ================================================================
+app.get('/api/pump-levels', (req, res) => {
+  res.json({
+    levels:     SPEED_LEVELS,
+    pump4_fixed: true,
+    current: {
+      p1: pumpLevel(pumpSpeeds[0]), p2: pumpLevel(pumpSpeeds[1]),
+      p3: pumpLevel(pumpSpeeds[2]), p4: 'fixed',
+      p5: pumpLevel(pumpSpeeds[4]), p6: pumpLevel(pumpSpeeds[5]),
+      p7: pumpLevel(pumpSpeeds[6]),
+    },
+    speeds: {
+      p1: pumpSpeeds[0], p2: pumpSpeeds[1], p3: pumpSpeeds[2],
+      p4: pumpSpeeds[3], p5: pumpSpeeds[4], p6: pumpSpeeds[5], p7: pumpSpeeds[6],
+    },
+  });
 });
 
 // ================================================================
@@ -509,17 +557,17 @@ app.get('/api/alerts', async (req, res) => {
 
   const alerts = [];
   const d = latestData;
-  if (d.ph < ph_min || d.ph > ph_max)       alerts.push({ level:'danger',  message:`pH غير طبيعي: ${d.ph}`,        field:'ph' });
-  if (d.tds > tds_warn)                      alerts.push({ level:'warning', message:`TDS مرتفع: ${d.tds} ppm`,      field:'tds' });
-  if (d.turb1 > turb_warn || d.turb2 > turb_warn) alerts.push({ level:'warning', message:'عكارة مرتفعة',           field:'turbidity' });
-  if (d.pres1 > pres_max  || d.pres2 > pres_max)  alerts.push({ level:'danger',  message:'ضغط خطير!',              field:'pressure' });
-  if (d.tank1 < tank_low)                    alerts.push({ level:'warning', message:`خزان 1 شبه فارغ: ${d.tank1}%`, field:'tank1' });
-  if (d.tank4 > tank_full)                   alerts.push({ level:'info',    message:`خزان 4 ممتلئ: ${d.tank4}%`,    field:'tank4' });
+  if (d.ph < ph_min || d.ph > ph_max)             alerts.push({ level:'danger',  message:`pH غير طبيعي: ${d.ph}`,         field:'ph' });
+  if (d.tds > tds_warn)                            alerts.push({ level:'warning', message:`TDS مرتفع: ${d.tds} ppm`,       field:'tds' });
+  if (d.turb1 > turb_warn || d.turb2 > turb_warn) alerts.push({ level:'warning', message:'عكارة مرتفعة',                  field:'turbidity' });
+  if (d.pres1 > pres_max  || d.pres2 > pres_max)  alerts.push({ level:'danger',  message:'ضغط خطير!',                    field:'pressure' });
+  if (d.tank1 < tank_low)                          alerts.push({ level:'warning', message:`خزان 1 شبه فارغ: ${d.tank1}%`, field:'tank1' });
+  if (d.tank4 > tank_full)                         alerts.push({ level:'info',    message:`خزان 4 ممتلئ: ${d.tank4}%`,    field:'tank4' });
 
   const filterLabels = ['P1','P2','P5','P6'];
   for (let i = 0; i < 4; i++) {
-    if (d[`f${i+1}`])  alerts.push({ level:'warning', message:`فلتر ${filterLabels[i]} منسد — المضخة متوقفة`, field:`filter${i+1}` });
-    if (d[`fw${i+1}`]) alerts.push({ level:'info',    message:`فلتر ${filterLabels[i]} ينتظر إعادة التشغيل`,  field:`filter${i+1}` });
+    if (d[`f${i+1}`])  alerts.push({ level:'warning', message:`فلتر ${filterLabels[i]} منسد`, field:`filter${i+1}` });
+    if (d[`fw${i+1}`]) alerts.push({ level:'info',    message:`فلتر ${filterLabels[i]} ينتظر إعادة التشغيل`, field:`filter${i+1}` });
   }
   if (d.stopping)  alerts.push({ level:'info', message:'نظام 1 في وضع الإيقاف التدريجي', field:'stopping' });
   if (d.stopping3) alerts.push({ level:'info', message:'نظام 3 في وضع الإيقاف التدريجي', field:'stopping3' });
@@ -554,14 +602,8 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ================================================================
-//  GET /api/auth/me
-// ================================================================
 app.get('/api/auth/me', auth(), (req, res) => res.json({ user: req.user }));
 
-// ================================================================
-//  GET /api/users — admin فقط
-// ================================================================
 app.get('/api/users', auth(['admin']), async (req, res) => {
   try {
     const { rows } = await db.execute('SELECT id, name, email, role, active, created_at FROM users ORDER BY created_at DESC');
@@ -569,9 +611,6 @@ app.get('/api/users', auth(['admin']), async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ================================================================
-//  POST /api/users — admin فقط
-// ================================================================
 app.post('/api/users', auth(['admin']), async (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'اسم وإيميل وباسوورد مطلوبين' });
@@ -587,9 +626,6 @@ app.post('/api/users', auth(['admin']), async (req, res) => {
   }
 });
 
-// ================================================================
-//  PUT /api/users/:id — admin فقط
-// ================================================================
 app.put('/api/users/:id', auth(['admin']), async (req, res) => {
   const { name, role, active, password } = req.body;
   const id = parseInt(req.params.id);
@@ -602,9 +638,6 @@ app.put('/api/users/:id', auth(['admin']), async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ================================================================
-//  DELETE /api/users/:id — admin فقط
-// ================================================================
 app.delete('/api/users/:id', auth(['admin']), async (req, res) => {
   const id = parseInt(req.params.id);
   if (id === req.user.id) return res.status(400).json({ error: 'لا تقدر تحذف حسابك' });
@@ -614,16 +647,10 @@ app.delete('/api/users/:id', auth(['admin']), async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ================================================================
-//  GET /health
-// ================================================================
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v8' });
+  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v9' });
 });
 
-// ================================================================
-//  Self-ping — يحافظ على Render مستيقظاً
-// ================================================================
 const https = require('https');
 setInterval(() => {
   const host = process.env.RENDER_EXTERNAL_HOSTNAME;
@@ -631,9 +658,6 @@ setInterval(() => {
   https.get(`https://${host}/health`, () => {}).on('error', () => {});
 }, 4 * 60 * 1000);
 
-// ================================================================
-//  Start
-// ================================================================
 initDB().then(() => {
   app.listen(PORT, () => {
     console.log(`🚀 الخادم يعمل على المنفذ ${PORT}`);
