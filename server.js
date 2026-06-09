@@ -1,5 +1,5 @@
 // ================================================================
-//  Water Desalination — Backend API v9
+//  Water Desalination — Backend API v10
 //  ✅ v9: تحكم بسرعة المضخات في المود مانيال فقط
 //         - OFF=0 / LOW=90 / MEDIUM=150 / HIGH=255
 //         - Pump 4 لا تدعم تغيير السرعة (ON/OFF فقط)
@@ -542,10 +542,7 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
   if (!valid.includes(command))
     return res.status(400).json({ error: 'أمر غير مسموح' });
 
-  const isAutoMode       = !latestData.mode;
-  const isPumpIndividual = /^CMD:PUMP[1-7]_(ON|OFF)$/.test(command);
-  if (isAutoMode && isPumpIndividual)
-    return res.status(403).json({ error: 'لا يمكن تشغيل مضخة فردية في الأوتو' });
+  // ✅ v10: السماح بالتحكم الفردي بالمضخات في كلا الوضعين (AUTO و MANUAL)
 
   pendingCommands.push(command);
 
@@ -693,7 +690,7 @@ app.delete('/api/users/:id', auth(['admin']), async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v9' });
+  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v10' });
 });
 
 // ================================================================
