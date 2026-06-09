@@ -1,5 +1,6 @@
 // ================================================================
-//  Water Desalination — Backend API v10
+//  Water Desalination — Backend API v11
+//  ✅ v11: keep-alive كل 4 دقائق + GET /api/warmup
 //  ✅ v9: تحكم بسرعة المضخات في المود مانيال فقط
 //         - OFF=0 / LOW=90 / MEDIUM=150 / HIGH=255
 //         - Pump 4 لا تدعم تغيير السرعة (ON/OFF فقط)
@@ -693,24 +694,50 @@ app.delete('/api/users/:id', auth(['admin']), async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v10' });
+  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v11' });
 });
 
 // ================================================================
-//  ⚡ Keep-Alive — يمنع نوم Render (كل 13 دقيقة)
-//  Render ينيم السيرفر بعد 15 دقيقة بدون طلبات خارجية
-//  13 دقيقة = أضمن من 4 دقائق لأنها تُحسب كطلب خارجي حقيقي
+//  GET /api/warmup — يُستدعى من التطبيق عند الفتح
+//  يُعيد حالة السيرفر + آخر بيانات حساسات
+//  يُساعد في إيقاظ السيرفر قبل أي طلب ثقيل
+// ================================================================
+app.get('/api/warmup', (req, res) => {
+  res.json({
+    status:       'ok',
+    version:      'v11',
+    uptime:       Math.floor(process.uptime()),
+    esp32_online: lastESP32Contact
+      ? Math.floor((Date.now() - lastESP32Contact) / 1000) <= 10
+      : false,
+    lastSensor: {
+      ph:    latestData.ph,
+      tds:   latestData.tds,
+      sys1:  latestData.sys1,
+      sys3:  latestData.sys3,
+      mode:  latestData.mode,
+      ts:    latestData.timestamp,
+    },
+  });
+});
+
+// ================================================================
+//  ⚡ Keep-Alive — يمنع نوم Render (كل 4 دقائق)
+//  Render ينيم السيرفر بعد 15 دقيقة من غياب الطلبات الخارجية
+//  4 دقائق = أسرع استجابة + تزامن مع warmup من التطبيق
 // ================================================================
 const https = require('https');
 setInterval(() => {
   const host = process.env.RENDER_EXTERNAL_HOSTNAME;
   if (!host) return;
-  https.get(`https://${host}/health`, (r) => {
-    console.log(`[KeepAlive] ✓ ${r.statusCode}`);
+  https.get(`https://${host}/api/warmup`, (r) => {
+    let body = '';
+    r.on('data', chunk => body += chunk);
+    r.on('end',  ()    => console.log(`[KeepAlive] ✓ ${r.statusCode} uptime=${JSON.parse(body).uptime}s`));
   }).on('error', (e) => {
     console.error(`[KeepAlive] ✗ ${e.message}`);
   });
-}, 13 * 60 * 1000);
+}, 4 * 60 * 1000);
 
 initDB().then(() => {
   app.listen(PORT, () => {
