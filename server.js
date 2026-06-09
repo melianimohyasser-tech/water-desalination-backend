@@ -173,10 +173,12 @@ let latestData = {
 
 let pendingCommands  = [];
 let lastESP32Contact = null;
+let sys1StartTime    = null;
 
 // ================================================================
 //  ⚡ SSE — Server-Sent Events
 //  كل مرة ESP32 يبعث بيانات → نبثّها فوراً لكل المتصلين
+//  التطبيق والويب يستقبلون البيانات خلال < 600ms
 // ================================================================
 let sseClients = [];
 
@@ -187,7 +189,6 @@ function pushToSSE(data) {
     catch (_) { return false; }
   });
 }
-let sys1StartTime    = null;
 let sys3StartTime    = null;
 // P4 محمية — لا تتغير من CMD:LEVEL
 let pumpSpeeds = [150, 150, 150, 200, 150, 150, 150];
@@ -260,7 +261,7 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
     };
     lastESP32Contact = new Date();
 
-    // ⚡ SSE: ابعث البيانات الجديدة فوراً لكل المتصلين
+    // ⚡ SSE: ابعث البيانات فوراً لكل المتصلين (تطبيق + ويب)
     pushToSSE(withPumpLevels(latestData));
 
     if (d.sys1 === 1 && !sys1StartTime) sys1StartTime = new Date();
@@ -272,8 +273,6 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
     if (prev.sys3  !== d.sys3)  logEvent('system', `النظام 3 ${d.sys3  ? 'بدأ' : 'توقف'}`, d.sys3  ? 'info' : 'warning');
     if (prev.valve !== d.valve) logEvent('valve',  `الصمام ${d.valve ? 'فُتح' : 'أُغلق'}`, 'info');
     if (prev.mode  !== effectiveMode) logEvent('mode', `وضع التشغيل: ${effectiveMode ? 'يدوي' : 'تلقائي'}`, 'info');
-
-    const filterNames = ['فلتر 1 (P1)', 'فلتر 2 (P2)', 'فلتر 3 (P5)', 'فلتر 4 (P6)'];
     const fFields  = ['f1','f2','f3','f4'];
     const fwFields = ['fw1','fw2','fw3','fw4'];
     for (let i = 0; i < 4; i++) {
@@ -326,32 +325,31 @@ app.get('/api/sensor/latest', (req, res) => {
 });
 
 // ================================================================
-//  ⚡ GET /api/sensor/stream — SSE للتطبيق والويب
-//  - اتصال واحد دائم بدل polling كل ثانية
-//  - البيانات تُدفع فوراً عند كل تحديث من ESP32 (~500ms)
+//  ⚡ GET /api/sensor/stream — SSE
+//  اتصال واحد دائم بدل polling — بيانات فورية كل ~500ms
 // ================================================================
 app.get('/api/sensor/stream', (req, res) => {
-  res.setHeader('Content-Type',  'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection',    'keep-alive');
+  res.setHeader('Content-Type',      'text/event-stream');
+  res.setHeader('Cache-Control',     'no-cache');
+  res.setHeader('Connection',        'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');   // مهم لـ Render/Nginx
   res.flushHeaders();
 
   // أرسل البيانات الحالية فوراً عند الاتصال
   res.write(`data: ${JSON.stringify(withPumpLevels(latestData))}\n\n`);
 
-  // keep-alive ping كل 25 ثانية (يمنع timeout)
+  // ping كل 25 ثانية لمنع timeout
   const keepAlive = setInterval(() => {
     try { res.write(': ping\n\n'); } catch (_) {}
   }, 25000);
 
   sseClients.push(res);
-  console.log(`[SSE] اتصال جديد — إجمالي: ${sseClients.length}`);
+  console.log(`[SSE] متصل — إجمالي: ${sseClients.length}`);
 
   req.on('close', () => {
     clearInterval(keepAlive);
     sseClients = sseClients.filter(c => c !== res);
-    console.log(`[SSE] انقطع اتصال — إجمالي: ${sseClients.length}`);
+    console.log(`[SSE] انقطع — إجمالي: ${sseClients.length}`);
   });
 });
 
@@ -698,12 +696,21 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v9' });
 });
 
+// ================================================================
+//  ⚡ Keep-Alive — يمنع نوم Render (كل 13 دقيقة)
+//  Render ينيم السيرفر بعد 15 دقيقة بدون طلبات خارجية
+//  13 دقيقة = أضمن من 4 دقائق لأنها تُحسب كطلب خارجي حقيقي
+// ================================================================
 const https = require('https');
 setInterval(() => {
   const host = process.env.RENDER_EXTERNAL_HOSTNAME;
   if (!host) return;
-  https.get(`https://${host}/health`, () => {}).on('error', () => {});
-}, 4 * 60 * 1000);
+  https.get(`https://${host}/health`, (r) => {
+    console.log(`[KeepAlive] ✓ ${r.statusCode}`);
+  }).on('error', (e) => {
+    console.error(`[KeepAlive] ✗ ${e.message}`);
+  });
+}, 13 * 60 * 1000);
 
 initDB().then(() => {
   app.listen(PORT, () => {
