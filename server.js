@@ -516,7 +516,7 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
       return res.status(400).json({ error: 'المضخة 4 تشتغل ON/OFF فقط' });
 
     if (!latestData.mode)
-      return res.status(403).json({ error: 'تغيير المستوى متاح في المود مانيال فقط' });
+      return res.status(403).json({ error: 'التحكم اليدوي متاح في المود مانيال فقط' });
 
     const speed    = SPEED_LEVELS[levelName];
     const speedCmd = `CMD:SPEED:${pumpIdx}:${speed}`;
@@ -542,7 +542,10 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
   if (!valid.includes(command))
     return res.status(400).json({ error: 'أمر غير مسموح' });
 
-  // ✅ v10: السماح بالتحكم الفردي بالمضخات في كلا الوضعين (AUTO و MANUAL)
+  // ✅ v11: في المود AUTO — لا يُسمح بأي أمر إلا تغيير الوضع
+  const modeCommands = ['CMD:MODE_AUTO', 'CMD:MODE_MANUAL'];
+  if (!latestData.mode && !modeCommands.includes(command))
+    return res.status(403).json({ error: 'التحكم اليدوي متاح في المود مانيال فقط' });
 
   pendingCommands.push(command);
 
