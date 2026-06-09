@@ -173,6 +173,20 @@ let latestData = {
 
 let pendingCommands  = [];
 let lastESP32Contact = null;
+
+// ================================================================
+//  ⚡ SSE — Server-Sent Events
+//  كل مرة ESP32 يبعث بيانات → نبثّها فوراً لكل المتصلين
+// ================================================================
+let sseClients = [];
+
+function pushToSSE(data) {
+  const payload = `data: ${JSON.stringify(data)}\n\n`;
+  sseClients = sseClients.filter(res => {
+    try { res.write(payload); return true; }
+    catch (_) { return false; }
+  });
+}
 let sys1StartTime    = null;
 let sys3StartTime    = null;
 // P4 محمية — لا تتغير من CMD:LEVEL
@@ -246,6 +260,9 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
     };
     lastESP32Contact = new Date();
 
+    // ⚡ SSE: ابعث البيانات الجديدة فوراً لكل المتصلين
+    pushToSSE(withPumpLevels(latestData));
+
     if (d.sys1 === 1 && !sys1StartTime) sys1StartTime = new Date();
     if (d.sys1 === 0 &&  sys1StartTime) sys1StartTime = null;
     if (d.sys3 === 1 && !sys3StartTime) sys3StartTime = new Date();
@@ -306,6 +323,36 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
 // ================================================================
 app.get('/api/sensor/latest', (req, res) => {
   res.json(withPumpLevels(latestData));
+});
+
+// ================================================================
+//  ⚡ GET /api/sensor/stream — SSE للتطبيق والويب
+//  - اتصال واحد دائم بدل polling كل ثانية
+//  - البيانات تُدفع فوراً عند كل تحديث من ESP32 (~500ms)
+// ================================================================
+app.get('/api/sensor/stream', (req, res) => {
+  res.setHeader('Content-Type',  'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection',    'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');   // مهم لـ Render/Nginx
+  res.flushHeaders();
+
+  // أرسل البيانات الحالية فوراً عند الاتصال
+  res.write(`data: ${JSON.stringify(withPumpLevels(latestData))}\n\n`);
+
+  // keep-alive ping كل 25 ثانية (يمنع timeout)
+  const keepAlive = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch (_) {}
+  }, 25000);
+
+  sseClients.push(res);
+  console.log(`[SSE] اتصال جديد — إجمالي: ${sseClients.length}`);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    sseClients = sseClients.filter(c => c !== res);
+    console.log(`[SSE] انقطع اتصال — إجمالي: ${sseClients.length}`);
+  });
 });
 
 // ================================================================
