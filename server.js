@@ -365,20 +365,54 @@ app.get('/api/command/pending', auth(['device']), (req, res) => {
 
 // ================================================================
 //  GET /api/sensor/history
+//  query params:
+//    limit  — عدد الصفوف (max 500, default 50)
+//    from   — ISO8601 أو YYYY-MM-DD (بداية الفترة)
+//    to     — ISO8601 أو YYYY-MM-DD (نهاية الفترة)
+//
+//  ✅ fix: timestamp في Turso مخزن UTC بدون +00:00
+//          نحوّل from/to لـ UTC string نظيف بدون timezone suffix
+//          حتى BETWEEN يشتغل صح
 // ================================================================
 app.get('/api/sensor/history', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 500);
-    const from  = req.query.from;
-    const to    = req.query.to;
+    let from = req.query.from;
+    let to   = req.query.to;
+
+    // ✅ إذا المستخدم بعث تاريخ فقط YYYY-MM-DD، أضف الوقت
+    if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) from = `${from}T00:00:00.000Z`;
+    if (to   && /^\d{4}-\d{2}-\d{2}$/.test(to))   to   = `${to}T23:59:59.999Z`;
+
+    // ✅ حوّل أي تاريخ ISO لـ UTC string نظيف (بدون +xx:xx)
+    //    لأن Turso يخزن CURRENT_TIMESTAMP كـ "2025-06-10 08:30:00" بدون Z
+    if (from) {
+      const d = new Date(from);
+      if (!isNaN(d)) from = d.toISOString().replace('T', ' ').replace('Z', '');
+    }
+    if (to) {
+      const d = new Date(to);
+      if (!isNaN(d)) to = d.toISOString().replace('T', ' ').replace('Z', '');
+    }
+
+    console.log(`[history] limit=${limit} from="${from}" to="${to}"`);
+
     let sql  = 'SELECT * FROM sensor_data';
     let args = [];
-    if (from && to) { sql += ' WHERE timestamp BETWEEN ? AND ?'; args = [from, to]; }
+    if (from && to) {
+      sql  += ' WHERE timestamp BETWEEN ? AND ?';
+      args  = [from, to];
+    }
     sql += ' ORDER BY id DESC LIMIT ?';
     args.push(limit);
+
     const result = await db.execute({ sql, args });
+    console.log(`[history] rows returned: ${result.rows.length}`);
     res.json(result.rows.reverse());
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('[history] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ================================================================
