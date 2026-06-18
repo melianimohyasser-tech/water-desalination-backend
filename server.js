@@ -1,10 +1,12 @@
 // ================================================================
-//  Water Desalination — Backend API v11
+//  Water Desalination — Backend API v12
+//  ✅ v12: إضافة أعمدة جديدة في sensor_data:
+//          sp1-sp7  (سرعات المضخات الفعلية)
+//          f1-f4    (فلاتر منسدة)
+//          fw1-fw4  (تنتظر إعادة التشغيل)
+//          stopping, stopping3 (إيقاف تدريجي)
 //  ✅ v11: keep-alive كل 4 دقائق + GET /api/warmup
 //  ✅ v9: تحكم بسرعة المضخات في المود مانيال فقط
-//         - OFF=0 / LOW=90 / MEDIUM=150 / HIGH=255
-//         - Pump 4 لا تدعم تغيير السرعة (ON/OFF فقط)
-//         - CMD:LEVEL:P:VALUE (new) بالإضافة إلى CMD:SPEED
 //  🔒 الأمان: CORS + device auth + JWT من .env
 //  ⚡ الأداء: pending commands بدون DB + command/pending endpoint
 // ================================================================
@@ -82,26 +84,84 @@ const db = createClient({
   authToken: process.env.TURSO_TOKEN,
 });
 
+// ================================================================
+//  ✅ v12: initDB — مع الأعمدة الجديدة
+// ================================================================
 async function initDB() {
+  // جدول sensor_data الكامل
   await db.execute(`
     CREATE TABLE IF NOT EXISTS sensor_data (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      ph        REAL DEFAULT 0, tds    REAL DEFAULT 0,
-      turb1     REAL DEFAULT 0, turb2  REAL DEFAULT 0,
-      pres1     REAL DEFAULT 0, pres2  REAL DEFAULT 0,
-      flow1     REAL DEFAULT 0, flow2  REAL DEFAULT 0,
-      vol1      REAL DEFAULT 0, vol2   REAL DEFAULT 0,
-      tank1     INTEGER DEFAULT 0, tank2 INTEGER DEFAULT 0,
-      tank3     INTEGER DEFAULT 0, tank4 INTEGER DEFAULT 0,
-      p1 INTEGER DEFAULT 0, p2 INTEGER DEFAULT 0,
-      p3 INTEGER DEFAULT 0, p4 INTEGER DEFAULT 0,
-      p5 INTEGER DEFAULT 0, p6 INTEGER DEFAULT 0,
-      p7 INTEGER DEFAULT 0,
-      sys1  INTEGER DEFAULT 0, sys3  INTEGER DEFAULT 0,
-      mode  INTEGER DEFAULT 0, valve INTEGER DEFAULT 0,
-      temp1 REAL DEFAULT 0,    temp2 REAL DEFAULT 0,
+      ph        REAL    DEFAULT 0,
+      tds       REAL    DEFAULT 0,
+      turb1     REAL    DEFAULT 0,
+      turb2     REAL    DEFAULT 0,
+      pres1     REAL    DEFAULT 0,
+      pres2     REAL    DEFAULT 0,
+      flow1     REAL    DEFAULT 0,
+      flow2     REAL    DEFAULT 0,
+      vol1      REAL    DEFAULT 0,
+      vol2      REAL    DEFAULT 0,
+      temp1     REAL    DEFAULT 0,
+      temp2     REAL    DEFAULT 0,
+      tank1     INTEGER DEFAULT 0,
+      tank2     INTEGER DEFAULT 0,
+      tank3     INTEGER DEFAULT 0,
+      tank4     INTEGER DEFAULT 0,
+      p1        INTEGER DEFAULT 0,
+      p2        INTEGER DEFAULT 0,
+      p3        INTEGER DEFAULT 0,
+      p4        INTEGER DEFAULT 0,
+      p5        INTEGER DEFAULT 0,
+      p6        INTEGER DEFAULT 0,
+      p7        INTEGER DEFAULT 0,
+      sp1       INTEGER DEFAULT 0,
+      sp2       INTEGER DEFAULT 0,
+      sp3       INTEGER DEFAULT 0,
+      sp4       INTEGER DEFAULT 0,
+      sp5       INTEGER DEFAULT 0,
+      sp6       INTEGER DEFAULT 0,
+      sp7       INTEGER DEFAULT 0,
+      sys1      INTEGER DEFAULT 0,
+      sys3      INTEGER DEFAULT 0,
+      mode      INTEGER DEFAULT 0,
+      valve     INTEGER DEFAULT 0,
+      f1        INTEGER DEFAULT 0,
+      f2        INTEGER DEFAULT 0,
+      f3        INTEGER DEFAULT 0,
+      f4        INTEGER DEFAULT 0,
+      fw1       INTEGER DEFAULT 0,
+      fw2       INTEGER DEFAULT 0,
+      fw3       INTEGER DEFAULT 0,
+      fw4       INTEGER DEFAULT 0,
+      stopping  INTEGER DEFAULT 0,
+      stopping3 INTEGER DEFAULT 0,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+
+  // ✅ v12: إضافة الأعمدة الجديدة على جداول موجودة (ALTER TABLE — آمن إذا كانت موجودة)
+  const newCols = [
+    ['sp1','INTEGER DEFAULT 0'],   ['sp2','INTEGER DEFAULT 0'],
+    ['sp3','INTEGER DEFAULT 0'],   ['sp4','INTEGER DEFAULT 0'],
+    ['sp5','INTEGER DEFAULT 0'],   ['sp6','INTEGER DEFAULT 0'],
+    ['sp7','INTEGER DEFAULT 0'],
+    ['f1','INTEGER DEFAULT 0'],    ['f2','INTEGER DEFAULT 0'],
+    ['f3','INTEGER DEFAULT 0'],    ['f4','INTEGER DEFAULT 0'],
+    ['fw1','INTEGER DEFAULT 0'],   ['fw2','INTEGER DEFAULT 0'],
+    ['fw3','INTEGER DEFAULT 0'],   ['fw4','INTEGER DEFAULT 0'],
+    ['stopping','INTEGER DEFAULT 0'],
+    ['stopping3','INTEGER DEFAULT 0'],
+    ['temp1','REAL DEFAULT 0'],
+    ['temp2','REAL DEFAULT 0'],
+  ];
+  for (const [col, def] of newCols) {
+    try {
+      await db.execute(`ALTER TABLE sensor_data ADD COLUMN ${col} ${def}`);
+      console.log(`✅ عمود جديد: ${col}`);
+    } catch (_) {
+      // العمود موجود مسبقاً — طبيعي
+    }
+  }
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS event_log (
@@ -109,7 +169,8 @@ async function initDB() {
       type      TEXT NOT NULL,
       message   TEXT NOT NULL,
       level     TEXT DEFAULT 'info',
-      temp1     REAL DEFAULT 0, temp2 REAL DEFAULT 0,
+      temp1     REAL DEFAULT 0,
+      temp2     REAL DEFAULT 0,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
@@ -142,17 +203,19 @@ async function initDB() {
     )`);
 
   const defaults = [
-    ['ph_min','6.5'], ['ph_max','8.5'],
-    ['tds_warn','500'], ['tds_crit','800'],
+    ['ph_min','6.5'],    ['ph_max','8.5'],
+    ['tds_warn','500'],  ['tds_crit','800'],
     ['pres_max','10'],
-    ['turb_warn','4'], ['turb_crit','8'],
-    ['tank_low','10'], ['tank_full','95'],
+    ['turb_warn','4'],   ['turb_crit','8'],
+    ['tank_low','10'],   ['tank_full','95'],
+    ['temp_max','40'],
+    ['flow_min','0.5'],
     ['pump_speeds','150,150,150,200,150,150,150'],
   ];
   for (const [k, v] of defaults)
     await db.execute({ sql: 'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', args: [k, v] });
 
-  console.log('✅ Turso جاهز');
+  console.log('✅ Turso جاهز — v12');
 }
 
 // ================================================================
@@ -161,6 +224,7 @@ async function initDB() {
 let latestData = {
   ph:0, tds:0, turb1:0, turb2:0,
   pres1:0, pres2:0, flow1:0, flow2:0, vol1:0, vol2:0,
+  temp1:0, temp2:0,
   tank1:0, tank2:0, tank3:0, tank4:0,
   p1:0, p2:0, p3:0, p4:0, p5:0, p6:0, p7:0,
   sp1:0, sp2:0, sp3:0, sp4:0, sp5:0, sp6:0, sp7:0,
@@ -168,18 +232,16 @@ let latestData = {
   f1:0, f2:0, f3:0, f4:0,
   fw1:0, fw2:0, fw3:0, fw4:0,
   stopping:0, stopping3:0,
-  temp1:0, temp2:0,
   timestamp: new Date().toISOString(),
 };
 
 let pendingCommands  = [];
 let lastESP32Contact = null;
 let sys1StartTime    = null;
+let sys3StartTime    = null;
 
 // ================================================================
 //  ⚡ SSE — Server-Sent Events
-//  كل مرة ESP32 يبعث بيانات → نبثّها فوراً لكل المتصلين
-//  التطبيق والويب يستقبلون البيانات خلال < 600ms
 // ================================================================
 let sseClients = [];
 
@@ -190,7 +252,7 @@ function pushToSSE(data) {
     catch (_) { return false; }
   });
 }
-let sys3StartTime    = null;
+
 // P4 محمية — لا تتغير من CMD:LEVEL
 let pumpSpeeds = [150, 150, 150, 200, 150, 150, 150];
 
@@ -199,17 +261,12 @@ let modeLockedValue = null;
 let modeLockTimer   = null;
 const MODE_LOCK_MS  = 15000;
 
-// ================================================================
-//  ✅ v9: مستويات السرعة
-//  التطبيق/ويب: OFF=0, LOW=90, MEDIUM=150, HIGH=255
-//  الشاشة Nextion: OFF=0, ON=150 (لا تتغير)
-// ================================================================
 const SPEED_LEVELS = { off: 0, low: 90, medium: 150, high: 255 };
 
 function pumpLevel(speed) {
-  if (speed === 0)   return 'off';
-  if (speed <= 90)   return 'low';
-  if (speed <= 150)  return 'medium';
+  if (speed === 0)  return 'off';
+  if (speed <= 90)  return 'low';
+  if (speed <= 150) return 'medium';
   return 'high';
 }
 
@@ -224,6 +281,8 @@ function withPumpLevels(data) {
     },
   };
 }
+
+const filterNames = ['فلتر P1', 'فلتر P2', 'فلتر P5', 'فلتر P6'];
 
 async function logEvent(type, message, level = 'info') {
   try {
@@ -262,7 +321,7 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
     };
     lastESP32Contact = new Date();
 
-    // ⚡ SSE: ابعث البيانات فوراً لكل المتصلين (تطبيق + ويب)
+    // ⚡ SSE: ابعث البيانات فوراً
     pushToSSE(withPumpLevels(latestData));
 
     if (d.sys1 === 1 && !sys1StartTime) sys1StartTime = new Date();
@@ -270,10 +329,12 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
     if (d.sys3 === 1 && !sys3StartTime) sys3StartTime = new Date();
     if (d.sys3 === 0 &&  sys3StartTime) sys3StartTime = null;
 
+    // سجل الأحداث المهمة
     if (prev.sys1  !== d.sys1)  logEvent('system', `النظام 1 ${d.sys1  ? 'بدأ' : 'توقف'}`, d.sys1  ? 'info' : 'warning');
     if (prev.sys3  !== d.sys3)  logEvent('system', `النظام 3 ${d.sys3  ? 'بدأ' : 'توقف'}`, d.sys3  ? 'info' : 'warning');
     if (prev.valve !== d.valve) logEvent('valve',  `الصمام ${d.valve ? 'فُتح' : 'أُغلق'}`, 'info');
     if (prev.mode  !== effectiveMode) logEvent('mode', `وضع التشغيل: ${effectiveMode ? 'يدوي' : 'تلقائي'}`, 'info');
+
     const fFields  = ['f1','f2','f3','f4'];
     const fwFields = ['fw1','fw2','fw3','fw4'];
     for (let i = 0; i < 4; i++) {
@@ -284,28 +345,43 @@ app.post('/api/sensor', auth(['device']), (req, res) => {
       if (prev[fwFields[i]] !== d[fwFields[i]] && d[fwFields[i]])
         logEvent('filter', `${filterNames[i]} ينتظر إعادة التشغيل (15s)`, 'info');
     }
+
     if (prev.stopping  !== d.stopping  && d.stopping)  logEvent('system', 'إيقاف تدريجي لنظام 1 بدأ', 'warning');
     if (prev.stopping3 !== d.stopping3 && d.stopping3) logEvent('system', 'إيقاف تدريجي لنظام 3 بدأ', 'warning');
 
+    // تنبيهات قيم خطرة
     if (d.ph > 0 && (d.ph < 6.5 || d.ph > 8.5)) logEvent('alert', `pH غير طبيعي: ${Number(d.ph).toFixed(2)}`, 'danger');
     if (d.tds > 500)                              logEvent('alert', `TDS مرتفع: ${Number(d.tds).toFixed(0)} ppm`, 'warning');
     if (d.pres1 > 10 || d.pres2 > 10)            logEvent('alert', `ضغط خطير: ${Math.max(d.pres1, d.pres2).toFixed(1)} bar`, 'danger');
+    if (d.temp1 > 40 || d.temp2 > 40)            logEvent('alert', `حرارة مرتفعة: T1=${d.temp1}°C T2=${d.temp2}°C`, 'warning');
+    if (d.flow1 > 0 && d.flow1 < 0.5 && d.p1)   logEvent('alert', `تدفق منخفض على P1: ${Number(d.flow1).toFixed(2)} L/min`, 'warning');
+    if (d.flow2 > 0 && d.flow2 < 0.5 && d.p2)   logEvent('alert', `تدفق منخفض على P2: ${Number(d.flow2).toFixed(2)} L/min`, 'warning');
 
+    // ✅ v12: حفظ كل المتغيرات في DB
     db.execute({
       sql: `INSERT INTO sensor_data
               (ph,tds,turb1,turb2,pres1,pres2,flow1,flow2,
-               vol1,vol2,tank1,tank2,tank3,tank4,
-               p1,p2,p3,p4,p5,p6,p7,sys1,sys3,mode,valve,temp1,temp2)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+               vol1,vol2,temp1,temp2,
+               tank1,tank2,tank3,tank4,
+               p1,p2,p3,p4,p5,p6,p7,
+               sp1,sp2,sp3,sp4,sp5,sp6,sp7,
+               sys1,sys3,mode,valve,
+               f1,f2,f3,f4,fw1,fw2,fw3,fw4,
+               stopping,stopping3)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       args: [
-        d.ph??0, d.tds??0, d.turb1??0, d.turb2??0,
-        d.pres1??0, d.pres2??0, d.flow1??0, d.flow2??0,
-        d.vol1??0, d.vol2??0,
-        d.tank1??0, d.tank2??0, d.tank3??0, d.tank4??0,
-        d.p1??0, d.p2??0, d.p3??0, d.p4??0,
-        d.p5??0, d.p6??0, d.p7??0,
-        d.sys1??0, d.sys3??0, d.mode??0, d.valve??0,
-        d.temp1??0, d.temp2??0,
+        d.ph??0,    d.tds??0,    d.turb1??0, d.turb2??0,
+        d.pres1??0, d.pres2??0,  d.flow1??0, d.flow2??0,
+        d.vol1??0,  d.vol2??0,   d.temp1??0, d.temp2??0,
+        d.tank1??0, d.tank2??0,  d.tank3??0, d.tank4??0,
+        d.p1??0,    d.p2??0,     d.p3??0,    d.p4??0,
+        d.p5??0,    d.p6??0,     d.p7??0,
+        d.sp1??0,   d.sp2??0,    d.sp3??0,   d.sp4??0,
+        d.sp5??0,   d.sp6??0,    d.sp7??0,
+        d.sys1??0,  d.sys3??0,   d.mode??0,  d.valve??0,
+        d.f1??0,    d.f2??0,     d.f3??0,    d.f4??0,
+        d.fw1??0,   d.fw2??0,    d.fw3??0,   d.fw4??0,
+        d.stopping??0, d.stopping3??0,
       ],
     }).catch(() => {});
 
@@ -327,19 +403,16 @@ app.get('/api/sensor/latest', (req, res) => {
 
 // ================================================================
 //  ⚡ GET /api/sensor/stream — SSE
-//  اتصال واحد دائم بدل polling — بيانات فورية كل ~500ms
 // ================================================================
 app.get('/api/sensor/stream', (req, res) => {
   res.setHeader('Content-Type',      'text/event-stream');
   res.setHeader('Cache-Control',     'no-cache');
   res.setHeader('Connection',        'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');   // مهم لـ Render/Nginx
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  // أرسل البيانات الحالية فوراً عند الاتصال
   res.write(`data: ${JSON.stringify(withPumpLevels(latestData))}\n\n`);
 
-  // ping كل 25 ثانية لمنع timeout
   const keepAlive = setInterval(() => {
     try { res.write(': ping\n\n'); } catch (_) {}
   }, 25000);
@@ -365,14 +438,6 @@ app.get('/api/command/pending', auth(['device']), (req, res) => {
 
 // ================================================================
 //  GET /api/sensor/history
-//  query params:
-//    limit  — عدد الصفوف (max 500, default 50)
-//    from   — ISO8601 أو YYYY-MM-DD (بداية الفترة)
-//    to     — ISO8601 أو YYYY-MM-DD (نهاية الفترة)
-//
-//  ✅ fix: timestamp في Turso مخزن UTC بدون +00:00
-//          نحوّل from/to لـ UTC string نظيف بدون timezone suffix
-//          حتى BETWEEN يشتغل صح
 // ================================================================
 app.get('/api/sensor/history', async (req, res) => {
   try {
@@ -380,12 +445,9 @@ app.get('/api/sensor/history', async (req, res) => {
     let from = req.query.from;
     let to   = req.query.to;
 
-    // ✅ إذا المستخدم بعث تاريخ فقط YYYY-MM-DD، أضف الوقت
     if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) from = `${from}T00:00:00.000Z`;
     if (to   && /^\d{4}-\d{2}-\d{2}$/.test(to))   to   = `${to}T23:59:59.999Z`;
 
-    // ✅ حوّل أي تاريخ ISO لـ UTC string نظيف (بدون +xx:xx)
-    //    لأن Turso يخزن CURRENT_TIMESTAMP كـ "2025-06-10 08:30:00" بدون Z
     if (from) {
       const d = new Date(from);
       if (!isNaN(d)) from = d.toISOString().replace('T', ' ').replace('Z', '');
@@ -394,8 +456,6 @@ app.get('/api/sensor/history', async (req, res) => {
       const d = new Date(to);
       if (!isNaN(d)) to = d.toISOString().replace('T', ' ').replace('Z', '');
     }
-
-    console.log(`[history] limit=${limit} from="${from}" to="${to}"`);
 
     let sql  = 'SELECT * FROM sensor_data';
     let args = [];
@@ -407,7 +467,6 @@ app.get('/api/sensor/history', async (req, res) => {
     args.push(limit);
 
     const result = await db.execute({ sql, args });
-    console.log(`[history] rows returned: ${result.rows.length}`);
     res.json(result.rows.reverse());
   } catch (err) {
     console.error('[history] error:', err.message);
@@ -438,10 +497,11 @@ app.get('/api/stats', async (req, res) => {
     };
     res.json({
       count: rows.length, hours,
-      ph: calc('ph'), tds: calc('tds'),
+      ph:    calc('ph'),    tds:   calc('tds'),
       turb1: calc('turb1'), turb2: calc('turb2'),
       pres1: calc('pres1'), pres2: calc('pres2'),
       flow1: calc('flow1'), flow2: calc('flow2'),
+      temp1: calc('temp1'), temp2: calc('temp2'),
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -509,24 +569,16 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
   if (!command || !command.startsWith('CMD:'))
     return res.status(400).json({ error: 'أمر غير صالح' });
 
-  // ================================================================
-  //  ✅ v9: CMD:SPEED:P:VALUE — سرعة خام 0-255
-  //  Pump 4 محمية | المود مانيال فقط
-  // ================================================================
   if (command.startsWith('CMD:SPEED:')) {
     const parts   = command.split(':');
     const pumpIdx = parseInt(parts[2]);
     const speed   = parseInt(parts[3]);
-
     if (parts.length !== 4 || pumpIdx < 1 || pumpIdx > 7 || isNaN(speed) || speed < 0 || speed > 255)
       return res.status(400).json({ error: 'صيغة أمر السرعة خاطئة' });
-
     if (pumpIdx === 4)
       return res.status(400).json({ error: 'المضخة 4 تشتغل ON/OFF فقط' });
-
     if (!latestData.mode)
       return res.status(403).json({ error: 'تغيير السرعة متاح في المود مانيال فقط' });
-
     pendingCommands.push(command);
     pumpSpeeds[pumpIdx - 1] = speed;
     db.execute({ sql: "INSERT OR REPLACE INTO settings (key, value) VALUES ('pump_speeds', ?)", args: [pumpSpeeds.join(',')] }).catch(() => {});
@@ -534,25 +586,16 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
     return res.json({ status: 'ok', queued: command, level: pumpLevel(speed) });
   }
 
-  // ================================================================
-  //  ✅ v9: CMD:LEVEL:P:LEVEL — off/low/medium/high
-  //  يُترجم إلى CMD:SPEED للميقا
-  //  Pump 4 محمية | المود مانيال فقط
-  // ================================================================
   if (command.startsWith('CMD:LEVEL:')) {
     const parts     = command.split(':');
     const pumpIdx   = parseInt(parts[2]);
     const levelName = parts[3]?.toLowerCase();
-
     if (parts.length !== 4 || pumpIdx < 1 || pumpIdx > 7 || !(levelName in SPEED_LEVELS))
       return res.status(400).json({ error: 'صيغة خاطئة — استخدم: off/low/medium/high' });
-
     if (pumpIdx === 4)
       return res.status(400).json({ error: 'المضخة 4 تشتغل ON/OFF فقط' });
-
     if (!latestData.mode)
       return res.status(403).json({ error: 'التحكم اليدوي متاح في المود مانيال فقط' });
-
     const speed    = SPEED_LEVELS[levelName];
     const speedCmd = `CMD:SPEED:${pumpIdx}:${speed}`;
     pendingCommands.push(speedCmd);
@@ -562,9 +605,6 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
     return res.json({ status: 'ok', queued: speedCmd, level: levelName, speed });
   }
 
-  // ================================================================
-  //  الأوامر الأساسية
-  // ================================================================
   const valid = [
     'CMD:PUMP1_ON','CMD:PUMP1_OFF','CMD:PUMP2_ON','CMD:PUMP2_OFF',
     'CMD:PUMP3_ON','CMD:PUMP3_OFF','CMD:PUMP4_ON','CMD:PUMP4_OFF',
@@ -577,7 +617,6 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
   if (!valid.includes(command))
     return res.status(400).json({ error: 'أمر غير مسموح' });
 
-  // ✅ v11: في المود AUTO — لا يُسمح بأي أمر إلا تغيير الوضع
   const modeCommands = ['CMD:MODE_AUTO', 'CMD:MODE_MANUAL'];
   if (!latestData.mode && !modeCommands.includes(command))
     return res.status(403).json({ error: 'التحكم اليدوي متاح في المود مانيال فقط' });
@@ -598,11 +637,11 @@ app.post('/api/command', auth(['admin', 'user']), async (req, res) => {
 });
 
 // ================================================================
-//  GET /api/pump-levels — مستويات السرعة الحالية
+//  GET /api/pump-levels
 // ================================================================
 app.get('/api/pump-levels', (req, res) => {
   res.json({
-    levels:     SPEED_LEVELS,
+    levels:      SPEED_LEVELS,
     pump4_fixed: true,
     current: {
       p1: pumpLevel(pumpSpeeds[0]), p2: pumpLevel(pumpSpeeds[1]),
@@ -621,7 +660,9 @@ app.get('/api/pump-levels', (req, res) => {
 //  GET /api/alerts
 // ================================================================
 app.get('/api/alerts', async (req, res) => {
-  let ph_min=6.5, ph_max=8.5, tds_warn=500, pres_max=10, turb_warn=4, tank_low=10, tank_full=95;
+  let ph_min=6.5, ph_max=8.5, tds_warn=500, pres_max=10,
+      turb_warn=4, tank_low=10, tank_full=95,
+      temp_max=40, flow_min=0.5;
   try {
     const { rows } = await db.execute('SELECT key, value FROM settings');
     for (const r of rows) {
@@ -632,25 +673,45 @@ app.get('/api/alerts', async (req, res) => {
       if (r.key==='turb_warn') turb_warn = parseFloat(r.value);
       if (r.key==='tank_low')  tank_low  = parseFloat(r.value);
       if (r.key==='tank_full') tank_full = parseFloat(r.value);
+      if (r.key==='temp_max')  temp_max  = parseFloat(r.value);
+      if (r.key==='flow_min')  flow_min  = parseFloat(r.value);
     }
   } catch (_) {}
 
   const alerts = [];
   const d = latestData;
-  if (d.ph < ph_min || d.ph > ph_max)             alerts.push({ level:'danger',  message:`pH غير طبيعي: ${d.ph}`,         field:'ph' });
-  if (d.tds > tds_warn)                            alerts.push({ level:'warning', message:`TDS مرتفع: ${d.tds} ppm`,       field:'tds' });
-  if (d.turb1 > turb_warn || d.turb2 > turb_warn) alerts.push({ level:'warning', message:'عكارة مرتفعة',                  field:'turbidity' });
-  if (d.pres1 > pres_max  || d.pres2 > pres_max)  alerts.push({ level:'danger',  message:'ضغط خطير!',                    field:'pressure' });
-  if (d.tank1 < tank_low)                          alerts.push({ level:'warning', message:`خزان 1 شبه فارغ: ${d.tank1}%`, field:'tank1' });
-  if (d.tank4 > tank_full)                         alerts.push({ level:'info',    message:`خزان 4 ممتلئ: ${d.tank4}%`,    field:'tank4' });
+
+  if (d.ph > 0 && (d.ph < ph_min || d.ph > ph_max))
+    alerts.push({ level:'danger',  message:`pH غير طبيعي: ${d.ph}`,          field:'ph' });
+  if (d.tds > tds_warn)
+    alerts.push({ level:'warning', message:`TDS مرتفع: ${d.tds} ppm`,        field:'tds' });
+  if (d.turb1 > turb_warn || d.turb2 > turb_warn)
+    alerts.push({ level:'warning', message:'عكارة مرتفعة',                    field:'turbidity' });
+  if (d.pres1 > pres_max  || d.pres2 > pres_max)
+    alerts.push({ level:'danger',  message:'ضغط خطير!',                       field:'pressure' });
+  if (d.tank1 < tank_low)
+    alerts.push({ level:'warning', message:`خزان 1 شبه فارغ: ${d.tank1}%`,   field:'tank1' });
+  if (d.tank4 > tank_full)
+    alerts.push({ level:'info',    message:`خزان 4 ممتلئ: ${d.tank4}%`,       field:'tank4' });
+  // ✅ v12: تنبيهات جديدة
+  if (d.temp1 > temp_max)
+    alerts.push({ level:'warning', message:`حرارة T1 مرتفعة: ${d.temp1}°C`,  field:'temp1' });
+  if (d.temp2 > temp_max)
+    alerts.push({ level:'warning', message:`حرارة T2 مرتفعة: ${d.temp2}°C`,  field:'temp2' });
+  if (d.flow1 > 0 && d.flow1 < flow_min && d.p1)
+    alerts.push({ level:'warning', message:`تدفق منخفض P1: ${d.flow1} L/min`, field:'flow1' });
+  if (d.flow2 > 0 && d.flow2 < flow_min && d.p2)
+    alerts.push({ level:'warning', message:`تدفق منخفض P2: ${d.flow2} L/min`, field:'flow2' });
+  if (d.stopping)
+    alerts.push({ level:'info',    message:'نظام 1 في وضع الإيقاف التدريجي', field:'stopping' });
+  if (d.stopping3)
+    alerts.push({ level:'info',    message:'نظام 3 في وضع الإيقاف التدريجي', field:'stopping3' });
 
   const filterLabels = ['P1','P2','P5','P6'];
   for (let i = 0; i < 4; i++) {
     if (d[`f${i+1}`])  alerts.push({ level:'warning', message:`فلتر ${filterLabels[i]} منسد`, field:`filter${i+1}` });
     if (d[`fw${i+1}`]) alerts.push({ level:'info',    message:`فلتر ${filterLabels[i]} ينتظر إعادة التشغيل`, field:`filter${i+1}` });
   }
-  if (d.stopping)  alerts.push({ level:'info', message:'نظام 1 في وضع الإيقاف التدريجي', field:'stopping' });
-  if (d.stopping3) alerts.push({ level:'info', message:'نظام 3 في وضع الإيقاف التدريجي', field:'stopping3' });
 
   res.json({ count: alerts.length, alerts });
 });
@@ -665,7 +726,7 @@ app.get('/api/esp32/status', (req, res) => {
 });
 
 // ================================================================
-//  POST /api/auth/login
+//  Auth
 // ================================================================
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
@@ -728,37 +789,31 @@ app.delete('/api/users/:id', auth(['admin']), async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v11' });
+  res.json({ status: 'ok', uptime: process.uptime(), db: 'Turso', version: 'v12' });
 });
 
 // ================================================================
-//  GET /api/warmup — يُستدعى من التطبيق عند الفتح
-//  يُعيد حالة السيرفر + آخر بيانات حساسات
-//  يُساعد في إيقاظ السيرفر قبل أي طلب ثقيل
+//  GET /api/warmup
 // ================================================================
 app.get('/api/warmup', (req, res) => {
   res.json({
     status:       'ok',
-    version:      'v11',
+    version:      'v12',
     uptime:       Math.floor(process.uptime()),
     esp32_online: lastESP32Contact
       ? Math.floor((Date.now() - lastESP32Contact) / 1000) <= 10
       : false,
     lastSensor: {
-      ph:    latestData.ph,
-      tds:   latestData.tds,
-      sys1:  latestData.sys1,
-      sys3:  latestData.sys3,
-      mode:  latestData.mode,
-      ts:    latestData.timestamp,
+      ph:    latestData.ph,    tds:   latestData.tds,
+      temp1: latestData.temp1, temp2: latestData.temp2,
+      sys1:  latestData.sys1,  sys3:  latestData.sys3,
+      mode:  latestData.mode,  ts:    latestData.timestamp,
     },
   });
 });
 
 // ================================================================
-//  ⚡ Keep-Alive — يمنع نوم Render (كل 4 دقائق)
-//  Render ينيم السيرفر بعد 15 دقيقة من غياب الطلبات الخارجية
-//  4 دقائق = أسرع استجابة + تزامن مع warmup من التطبيق
+//  ⚡ Keep-Alive — كل 4 دقائق
 // ================================================================
 const https = require('https');
 setInterval(() => {
