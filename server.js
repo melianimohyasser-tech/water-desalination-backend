@@ -438,12 +438,16 @@ app.get('/api/command/pending', auth(['device']), (req, res) => {
 
 // ================================================================
 //  GET /api/sensor/history
+//  ✅ v13: دعم pagination حقيقية عبر before_id (cursor-based)
+//          لجلب كل القراءات في فترة طويلة بدون فقدان بيانات.
+//          باقي يشتغل بنفس الطريقة القديمة إذا before_id ما تجاش.
 // ================================================================
 app.get('/api/sensor/history', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 1000);
     let from = req.query.from;
     let to   = req.query.to;
+    const beforeId = req.query.before_id ? parseInt(req.query.before_id) : null;
 
     if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) from = `${from}T00:00:00.000Z`;
     if (to   && /^\d{4}-\d{2}-\d{2}$/.test(to))   to   = `${to}T23:59:59.999Z`;
@@ -459,10 +463,11 @@ app.get('/api/sensor/history', async (req, res) => {
 
     let sql  = 'SELECT * FROM sensor_data';
     let args = [];
-    if (from && to) {
-      sql  += ' WHERE timestamp BETWEEN ? AND ?';
-      args  = [from, to];
-    }
+    const conditions = [];
+    if (from && to) { conditions.push('timestamp BETWEEN ? AND ?'); args.push(from, to); }
+    // ✅ v13: نجيبو الصفحة التالية الأقدم من beforeId — يسمح بسحب آلاف الصفوف بدون فوات
+    if (beforeId !== null && !isNaN(beforeId)) { conditions.push('id < ?'); args.push(beforeId); }
+    if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
     sql += ' ORDER BY id DESC LIMIT ?';
     args.push(limit);
 
